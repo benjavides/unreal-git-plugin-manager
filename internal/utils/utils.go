@@ -11,6 +11,24 @@ import (
 	"github.com/fatih/color"
 )
 
+// BellSkipper is an io.WriteCloser that skips the bell character (ASCII 7)
+type BellSkipper struct{}
+
+func (b *BellSkipper) Write(p []byte) (n int, err error) {
+	// Filter out bell characters (ASCII 7)
+	filtered := make([]byte, 0, len(p))
+	for _, b := range p {
+		if b != 7 { // Skip bell character
+			filtered = append(filtered, b)
+		}
+	}
+	return os.Stdout.Write(filtered)
+}
+
+func (b *BellSkipper) Close() error {
+	return nil
+}
+
 // Manager handles utility functions
 type Manager struct{}
 
@@ -102,7 +120,7 @@ func IsRunningAsAdmin() bool {
 	}
 
 	// Try to create a file in a system directory that requires admin rights
-	testPath := "C:\\Windows\\Temp\\ue-git-manager-admin-test.tmp"
+	testPath := "C:\\Windows\\Temp\\ue-git-plugin-manager-admin-test.tmp"
 	file, err := os.Create(testPath)
 	if err != nil {
 		return false

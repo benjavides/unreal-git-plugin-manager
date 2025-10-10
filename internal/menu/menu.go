@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ue-git-manager/internal/config"
-	"ue-git-manager/internal/detection"
-	"ue-git-manager/internal/engine"
-	"ue-git-manager/internal/git"
-	"ue-git-manager/internal/plugin"
-	"ue-git-manager/internal/utils"
+	"ue-git-plugin-manager/internal/config"
+	"ue-git-plugin-manager/internal/detection"
+	"ue-git-plugin-manager/internal/engine"
+	"ue-git-plugin-manager/internal/git"
+	"ue-git-plugin-manager/internal/plugin"
+	"ue-git-plugin-manager/internal/utils"
 
 	"github.com/fatih/color"
 	"github.com/manifoldco/promptui"
@@ -95,38 +95,17 @@ func Run(app Application) error {
 			ShowWhatIsThis()
 			utils.Pause()
 			app.GetUtils().ClearScreen()
-		case "Check Setup Status":
+		case "Edit Setup":
 			app.GetUtils().ClearScreen()
-			if err := runCheckSetupStatus(app, config); err != nil {
-				fmt.Printf("Error checking setup status: %v\n", err)
+			if err := runEditSetup(app, config); err != nil {
+				fmt.Printf("Error in edit setup: %v\n", err)
 				utils.Pause()
 			}
 			app.GetUtils().ClearScreen()
-		case "Update":
+		case "Settings":
 			app.GetUtils().ClearScreen()
-			if err := runUpdate(app, config); err != nil {
-				fmt.Printf("Error during update: %v\n", err)
-				utils.Pause()
-			}
-			app.GetUtils().ClearScreen()
-		case "Set up a new engine version":
-			app.GetUtils().ClearScreen()
-			if err := runSetupNewEngine(app, config); err != nil {
-				fmt.Printf("Error setting up new engine: %v\n", err)
-				utils.Pause()
-			}
-			app.GetUtils().ClearScreen()
-		case "Uninstall":
-			app.GetUtils().ClearScreen()
-			if err := runUninstall(app, config); err != nil {
-				fmt.Printf("Error during uninstall: %v\n", err)
-				utils.Pause()
-			}
-			app.GetUtils().ClearScreen()
-		case "Advanced":
-			app.GetUtils().ClearScreen()
-			if err := runAdvancedMenu(app, config); err != nil {
-				fmt.Printf("Error in advanced menu: %v\n", err)
+			if err := runSettings(app, config); err != nil {
+				fmt.Printf("Error in settings: %v\n", err)
 				utils.Pause()
 			}
 			app.GetUtils().ClearScreen()
@@ -139,11 +118,11 @@ func Run(app Application) error {
 // showMainMenu displays the main menu
 func showMainMenu(app Application, config *config.Config) (string, error) {
 	// Show status of managed engines
-	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🎮 UE Git Manager - Main Menu"))
+	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🎮 UE Git Plugin Manager - Main Menu"))
 	fmt.Println()
 
 	// Use detection system to show current status
-	summary, err := app.GetDetection().GetSimpleSetupSummary(config.CustomEngineRoots)
+	summary, err := app.GetDetection().GetSimpleSetupSummary(config.CustomEngineRoots, config.DefaultRemoteBranch)
 	if err != nil {
 		fmt.Printf("Warning: Could not detect setup status: %v\n", err)
 		fmt.Println()
@@ -153,18 +132,17 @@ func showMainMenu(app Application, config *config.Config) (string, error) {
 
 	items := []string{
 		"What is this?",
-		"Check Setup Status",
-		"Update",
-		"Set up a new engine version",
-		"Uninstall",
-		"Advanced",
+		"Edit Setup",
+		"Settings",
 		"Quit",
 	}
 
 	prompt := promptui.Select{
-		Label: "Select an option",
-		Items: items,
-		Size:  10,
+		Label:    "Select an option",
+		Items:    items,
+		Size:     10,
+		HideHelp: true,
+		Stdout:   &utils.BellSkipper{},
 	}
 
 	_, result, err := prompt.Run()
@@ -259,7 +237,7 @@ func GetStockPluginStatusIcon(status string) string {
 
 // runFirstTimeSetup handles the first-time setup flow
 func runFirstTimeSetup(app Application) error {
-	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🎮 UE Git Manager - Setup"))
+	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🎮 UE Git Plugin Manager - Setup"))
 	fmt.Println()
 
 	// Check if we have a config but no complete setups
@@ -676,7 +654,7 @@ func runSetupNewEngine(app Application, config *config.Config) error {
 
 // runUninstall handles the uninstall flow
 func runUninstall(app Application, config *config.Config) error {
-	fmt.Println(color.New(color.FgRed, color.Bold).Sprint("🗑️  Uninstall UE Git Manager"))
+	fmt.Println(color.New(color.FgRed, color.Bold).Sprint("🗑️  Uninstall UE Git Plugin Manager"))
 	fmt.Println()
 	fmt.Println("This will remove all plugin links and worktrees.")
 	fmt.Println("Your Unreal Engine installations will not be affected.")
@@ -913,9 +891,417 @@ func runDetailedSetupStatus(app Application, config *config.Config) error {
 	return nil
 }
 
+// runEditSetup shows detailed status and allows editing each engine setup
+func runEditSetup(app Application, config *config.Config) error {
+	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🔧 Edit Setup"))
+	fmt.Println()
+
+	// Get detailed setup status
+	statuses, err := app.GetDetection().DetectSetupStatus(config.CustomEngineRoots)
+	if err != nil {
+		return fmt.Errorf("failed to detect setup status: %v", err)
+	}
+
+	if len(statuses) == 0 {
+		fmt.Println("No Unreal Engine installations found.")
+		utils.Pause()
+		return nil
+	}
+
+	// Show detailed status for each engine
+	for _, status := range statuses {
+		fmt.Printf("Engine %s (%s):\n", status.EngineVersion, status.EnginePath)
+
+		if status.IsSetupComplete {
+			fmt.Println(color.New(color.FgGreen).Sprint("  ✅ Setup Complete"))
+		} else if status.IsNeverSetUp {
+			fmt.Println(color.New(color.FgBlue).Sprint("  ℹ️  Not Set Up"))
+		} else if status.IsBroken {
+			fmt.Println(color.New(color.FgYellow).Sprint("  ⚠️  Setup Broken"))
+		} else {
+			fmt.Println(color.New(color.FgRed).Sprint("  ❌ Setup Incomplete"))
+		}
+
+		// Show individual status with debugging
+		fmt.Printf("  - Worktree: %s", getStatusIcon(status.WorktreeExists))
+		if status.WorktreeExists {
+			worktreePath := app.GetGit().GetWorktreePath(status.EngineVersion)
+			fmt.Printf(" (%s)", worktreePath)
+		}
+		fmt.Println()
+
+		fmt.Printf("  - Junction: %s", getStatusIcon(status.JunctionExists))
+		if status.JunctionExists {
+			pluginLinkPath := app.GetPlugin().GetPluginLinkPath(status.EnginePath)
+			fmt.Printf(" (%s)", pluginLinkPath)
+		}
+		fmt.Println()
+
+		if status.JunctionExists {
+			fmt.Printf("  - Junction Valid: %s", getStatusIcon(status.JunctionValid))
+			if !status.JunctionValid {
+				// Show what the junction actually points to
+				pluginLinkPath := app.GetPlugin().GetPluginLinkPath(status.EnginePath)
+				if target, err := app.GetPlugin().GetJunctionTarget(pluginLinkPath); err == nil {
+					fmt.Printf(" (points to: %s)", target)
+				} else {
+					fmt.Printf(" (could not get target: %v)", err)
+				}
+			}
+			fmt.Println()
+		}
+
+		fmt.Printf("  - Binaries: %s", getStatusIcon(status.BinariesExist))
+		if status.WorktreeExists {
+			worktreePath := app.GetGit().GetWorktreePath(status.EngineVersion)
+			binariesPath := filepath.Join(worktreePath, "Binaries", "Win64")
+			fmt.Printf(" (%s)", binariesPath)
+		}
+		fmt.Println()
+
+		fmt.Printf("  - Stock Plugin: %s\n", GetStockPluginStatusIcon(status.StockPluginStatus))
+
+		// Show issues for broken setups
+		if status.IsBroken && len(status.Issues) > 0 {
+			fmt.Println("  Issues:")
+			for _, issue := range status.Issues {
+				fmt.Printf("    - %s\n", issue)
+			}
+		}
+		fmt.Println()
+	}
+
+	// Create menu options for each engine
+	var engineOptions []string
+	for _, status := range statuses {
+		statusText := "Not Set Up"
+		if status.IsSetupComplete {
+			statusText = "Setup Complete"
+		} else if status.IsBroken {
+			statusText = "Setup Broken"
+		}
+		engineOptions = append(engineOptions, fmt.Sprintf("UE %s - %s", status.EngineVersion, statusText))
+	}
+	engineOptions = append(engineOptions, "Back")
+
+	// Let user select an engine to edit
+	prompt := promptui.Select{
+		Label:    "Select an engine to edit",
+		Items:    engineOptions,
+		Size:     10,
+		HideHelp: true,
+		Stdout:   &utils.BellSkipper{},
+	}
+
+	_, selectedEngine, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return nil
+		}
+		return err
+	}
+
+	if selectedEngine == "Back" {
+		return nil
+	}
+
+	// Find the selected engine
+	var selectedStatus *detection.SetupStatus
+	for i, status := range statuses {
+		expectedText := fmt.Sprintf("UE %s -", status.EngineVersion)
+		if strings.Contains(selectedEngine, expectedText) {
+			selectedStatus = &statuses[i]
+			break
+		}
+	}
+
+	if selectedStatus == nil {
+		return fmt.Errorf("selected engine not found")
+	}
+
+	// Show options for the selected engine
+	return runEngineEditOptions(app, config, *selectedStatus)
+}
+
+// runEngineEditOptions shows options for editing a specific engine
+func runEngineEditOptions(app Application, config *config.Config, status detection.SetupStatus) error {
+	fmt.Printf("\nEditing UE %s:\n", status.EngineVersion)
+	fmt.Printf("Path: %s\n", status.EnginePath)
+	fmt.Println()
+
+	var options []string
+	if status.IsSetupComplete {
+		options = []string{
+			"Update Setup",
+			"Uninstall Setup",
+			"Back",
+		}
+	} else if status.IsBroken {
+		options = []string{
+			"Repair Setup",
+			"Uninstall Setup",
+			"Back",
+		}
+	} else {
+		options = []string{
+			"Install Setup",
+			"Back",
+		}
+	}
+
+	prompt := promptui.Select{
+		Label:    "What would you like to do?",
+		Items:    options,
+		Size:     10,
+		HideHelp: true,
+		Stdout:   &utils.BellSkipper{},
+	}
+
+	_, choice, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return nil
+		}
+		return err
+	}
+
+	switch choice {
+	case "Install Setup":
+		return runSetupForEngine(app, config, status.EnginePath, status.EngineVersion)
+	case "Update Setup":
+		return runUpdateForEngine(app, config, status.EnginePath, status.EngineVersion)
+	case "Repair Setup":
+		return runRepairForEngine(app, config, status.EnginePath, status.EngineVersion)
+	case "Uninstall Setup":
+		return runUninstallForEngine(app, config, status.EnginePath, status.EngineVersion)
+	case "Back":
+		return nil
+	}
+
+	return nil
+}
+
+// runSettings shows the settings menu
+func runSettings(app Application, config *config.Config) error {
+	items := []string{
+		"Add Engine Path",
+		"Change Branch to Track",
+		"Open Plugin Repository",
+		"Open Data Directory",
+		"Back",
+	}
+
+	prompt := promptui.Select{
+		Label:    "Settings",
+		Items:    items,
+		Size:     10,
+		HideHelp: true,
+		Stdout:   &utils.BellSkipper{},
+	}
+
+	_, choice, err := prompt.Run()
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return nil
+		}
+		return err
+	}
+
+	switch choice {
+	case "Add Engine Path":
+		changeScanRoots(app, config)
+		return nil
+	case "Change Branch to Track":
+		changeBranch(app, config)
+		return nil
+	case "Open Plugin Repository":
+		utils.OpenURL("https://github.com/ProjectBorealis/UEGitPlugin")
+		return nil
+	case "Open Data Directory":
+		baseDir := app.GetConfig().GetBaseDir()
+		utils.OpenURL("file:///" + strings.ReplaceAll(baseDir, "\\", "/"))
+		return nil
+	case "Back":
+		return nil
+	}
+
+	return nil
+}
+
+// runSetupForEngine sets up a specific engine
+func runSetupForEngine(app Application, config *config.Config, enginePath, engineVersion string) error {
+	fmt.Printf("Setting up UE %s...\n", engineVersion)
+
+	// Ensure origin repository exists
+	if !app.GetGit().IsOriginCloned() {
+		fmt.Println("Cloning origin repository...")
+		if err := app.GetGit().CloneOrigin(); err != nil {
+			return fmt.Errorf("failed to clone origin repository: %v", err)
+		}
+	}
+
+	// Create worktree
+	if err := app.GetGit().CreateWorktree(engineVersion); err != nil {
+		return fmt.Errorf("failed to create worktree: %v", err)
+	}
+
+	// Build plugin
+	worktreePath := app.GetGit().GetWorktreePath(engineVersion)
+	if err := app.GetPlugin().BuildForEngine(enginePath, worktreePath); err != nil {
+		return fmt.Errorf("failed to build plugin: %v", err)
+	}
+
+	// Create junction
+	if err := app.GetPlugin().CreateJunction(enginePath, app.GetGit().GetWorktreePath(engineVersion)); err != nil {
+		return fmt.Errorf("failed to create junction: %v", err)
+	}
+
+	// Disable stock plugin
+	if err := app.GetEngine().DisableStockPlugin(enginePath); err != nil {
+		return fmt.Errorf("failed to disable stock plugin: %v", err)
+	}
+
+	fmt.Printf("✅ UE %s setup complete!\n", engineVersion)
+	utils.Pause()
+	return nil
+}
+
+// runUpdateForEngine updates a specific engine
+func runUpdateForEngine(app Application, config *config.Config, enginePath, engineVersion string) error {
+	fmt.Printf("Checking for updates for UE %s...\n", engineVersion)
+
+	// Check if there are updates available
+	updateInfo, err := app.GetGit().GetUpdateInfo(engineVersion, config.DefaultRemoteBranch)
+	if err != nil {
+		return fmt.Errorf("failed to check for updates: %v", err)
+	}
+
+	if updateInfo.CommitsAhead == 0 {
+		fmt.Printf("✅ UE %s is already up to date!\n", engineVersion)
+		fmt.Printf("   Local commit: %s\n", updateInfo.LocalSHA[:8])
+		utils.Pause()
+		return nil
+	}
+
+	fmt.Printf("📥 Updates available: %d commits behind\n", updateInfo.CommitsAhead)
+	fmt.Printf("   Local commit:  %s\n", updateInfo.LocalSHA[:8])
+	fmt.Printf("   Remote commit: %s\n", updateInfo.RemoteSHA[:8])
+	fmt.Printf("   Compare: %s\n", updateInfo.CompareURL)
+	fmt.Println()
+
+	// Update worktree
+	fmt.Println("Updating worktree...")
+	if err := app.GetGit().UpdateWorktree(engineVersion, config.DefaultRemoteBranch); err != nil {
+		return fmt.Errorf("failed to update worktree: %v", err)
+	}
+
+	// Rebuild plugin
+	fmt.Println("Rebuilding plugin...")
+	worktreePath := app.GetGit().GetWorktreePath(engineVersion)
+	if err := app.GetPlugin().BuildForEngine(enginePath, worktreePath); err != nil {
+		return fmt.Errorf("failed to rebuild plugin: %v", err)
+	}
+
+	fmt.Printf("✅ UE %s updated successfully! (%d commits applied)\n", engineVersion, updateInfo.CommitsAhead)
+	utils.Pause()
+	return nil
+}
+
+// runRepairForEngine repairs a specific engine
+func runRepairForEngine(app Application, config *config.Config, enginePath, engineVersion string) error {
+	fmt.Printf("Repairing UE %s...\n", engineVersion)
+
+	// Check what needs repair
+	status := app.GetDetection().DetectEngineSetupStatus(enginePath, engineVersion)
+
+	// Recreate worktree if missing
+	if !status.WorktreeExists {
+		if err := app.GetGit().CreateWorktree(engineVersion); err != nil {
+			return fmt.Errorf("failed to create worktree: %v", err)
+		}
+	}
+
+	// Rebuild plugin if binaries missing
+	if !status.BinariesExist {
+		worktreePath := app.GetGit().GetWorktreePath(engineVersion)
+		if err := app.GetPlugin().BuildForEngine(enginePath, worktreePath); err != nil {
+			return fmt.Errorf("failed to build plugin: %v", err)
+		}
+	}
+
+	// Recreate junction if missing or invalid
+	if !status.JunctionExists || !status.JunctionValid {
+		// Remove existing junction first
+		pluginLinkPath := app.GetPlugin().GetPluginLinkPath(enginePath)
+		app.GetPlugin().RemoveJunction(pluginLinkPath)
+
+		// Create new junction
+		if err := app.GetPlugin().CreateJunction(enginePath, app.GetGit().GetWorktreePath(engineVersion)); err != nil {
+			return fmt.Errorf("failed to create junction: %v", err)
+		}
+	}
+
+	// Disable stock plugin if still enabled
+	if status.StockPluginStatus == "enabled" {
+		if err := app.GetEngine().DisableStockPlugin(enginePath); err != nil {
+			return fmt.Errorf("failed to disable stock plugin: %v", err)
+		}
+	}
+
+	fmt.Printf("✅ UE %s repaired successfully!\n", engineVersion)
+	utils.Pause()
+	return nil
+}
+
+// runUninstallForEngine uninstalls a specific engine
+func runUninstallForEngine(app Application, config *config.Config, enginePath, engineVersion string) error {
+	fmt.Printf("Uninstalling UE %s...\n", engineVersion)
+
+	// Remove junction
+	pluginLinkPath := app.GetPlugin().GetPluginLinkPath(enginePath)
+	if err := app.GetPlugin().RemoveJunction(pluginLinkPath); err != nil {
+		return fmt.Errorf("failed to remove junction: %v", err)
+	}
+
+	// Remove worktree
+	if err := app.GetGit().RemoveWorktree(engineVersion); err != nil {
+		return fmt.Errorf("failed to remove worktree: %v", err)
+	}
+
+	// Re-enable stock plugin
+	if err := app.GetEngine().EnableStockPlugin(enginePath); err != nil {
+		return fmt.Errorf("failed to re-enable stock plugin: %v", err)
+	}
+
+	fmt.Printf("✅ UE %s uninstalled successfully!\n", engineVersion)
+
+	// Check if this was the last engine, and if so, remove origin repo
+	statuses, err := app.GetDetection().DetectSetupStatus(config.CustomEngineRoots)
+	if err == nil {
+		remainingSetups := 0
+		for _, status := range statuses {
+			if status.IsSetupComplete {
+				remainingSetups++
+			}
+		}
+
+		if remainingSetups == 0 {
+			fmt.Println("This was the last engine setup. Removing origin repository...")
+			if err := app.GetGit().RemoveOrigin(); err != nil {
+				fmt.Printf("Warning: Failed to remove origin repository: %v\n", err)
+			} else {
+				fmt.Println("✅ Origin repository removed.")
+			}
+		}
+	}
+
+	utils.Pause()
+	return nil
+}
+
 // ShowWhatIsThis displays information about what this tool does
 func ShowWhatIsThis() {
-	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("ℹ️  What is UE Git Manager?"))
+	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("ℹ️  What is UE Git Plugin Manager?"))
 	fmt.Println()
 
 	fmt.Println("This tool automates the setup of Git source control for multiple Unreal Engine installations.")
@@ -924,9 +1310,9 @@ func ShowWhatIsThis() {
 
 	fmt.Println(color.New(color.FgYellow, color.Bold).Sprint("Why was this tool created?"))
 	fmt.Println("• Manual setup involves multiple complex steps that are easy to forget")
-	fmt.Println("• We typically do this setup only twice a year, so we have to re-learn it each time")
-	fmt.Println("• We constantly change Unreal Engine versions, requiring updates and rebuilds")
-	fmt.Println("• Setting up on each colleague's computer is time-consuming and error-prone")
+	fmt.Println("• This setup is typically done infrequently, so the process needs to be re-learned each time")
+	fmt.Println("• Teams constantly change Unreal Engine versions, requiring updates and rebuilds")
+	fmt.Println("• Setting up on multiple team members' computers is time-consuming and error-prone")
 	fmt.Println()
 
 	fmt.Println(color.New(color.FgYellow, color.Bold).Sprint("What does the setup do?"))
@@ -976,7 +1362,7 @@ func ShowWhatIsThis() {
 	fmt.Println()
 	fmt.Println("4. File System:")
 	fmt.Println("   • User has write access to UE installation directories")
-	fmt.Println("   • User config directory is accessible (%APPDATA%\\Pi\\unreal_source_control)")
+	fmt.Println("   • User config directory is accessible (%APPDATA%\\ue-git-plugin-manager\\unreal_source_control)")
 	fmt.Println("   • No antivirus interference with junction creation")
 	fmt.Println()
 	fmt.Println("If any of these assumptions change, the tool may need updates.")

@@ -1,4 +1,4 @@
-module ue-git-manager
+module ue-git-plugin-manager
 
 go 1.21
 

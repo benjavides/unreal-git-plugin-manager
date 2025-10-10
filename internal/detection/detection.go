@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ue-git-manager/internal/engine"
-	"ue-git-manager/internal/git"
-	"ue-git-manager/internal/plugin"
+	"ue-git-plugin-manager/internal/engine"
+	"ue-git-plugin-manager/internal/git"
+	"ue-git-plugin-manager/internal/plugin"
 )
 
 // SetupStatus represents the current state of the setup for a specific engine
@@ -225,7 +225,7 @@ func (d *Detector) GetSetupSummary(customEngineRoots []string) (string, error) {
 }
 
 // GetSimpleSetupSummary returns a simplified summary for the main menu
-func (d *Detector) GetSimpleSetupSummary(customEngineRoots []string) (string, error) {
+func (d *Detector) GetSimpleSetupSummary(customEngineRoots []string, defaultBranch string) (string, error) {
 	statuses, err := d.DetectSetupStatus(customEngineRoots)
 	if err != nil {
 		return "", err
@@ -246,6 +246,12 @@ func (d *Detector) GetSimpleSetupSummary(customEngineRoots []string) (string, er
 		if status.IsSetupComplete {
 			statusIcon = "✅"
 			statusText = "Setup Complete"
+
+			// Check for updates
+			updateInfo, err := d.git.GetUpdateInfo(status.EngineVersion, defaultBranch)
+			if err == nil && updateInfo.CommitsAhead > 0 {
+				statusText = fmt.Sprintf("Setup Complete (%d updates available)", updateInfo.CommitsAhead)
+			}
 		} else if status.IsBroken {
 			statusIcon = "⚠️"
 			statusText = "Setup Broken"

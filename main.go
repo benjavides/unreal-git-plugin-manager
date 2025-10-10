@@ -5,13 +5,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"ue-git-manager/internal/config"
-	"ue-git-manager/internal/detection"
-	"ue-git-manager/internal/engine"
-	"ue-git-manager/internal/git"
-	"ue-git-manager/internal/menu"
-	"ue-git-manager/internal/plugin"
-	"ue-git-manager/internal/utils"
+	"ue-git-plugin-manager/internal/config"
+	"ue-git-plugin-manager/internal/detection"
+	"ue-git-plugin-manager/internal/engine"
+	"ue-git-plugin-manager/internal/git"
+	"ue-git-plugin-manager/internal/menu"
+	"ue-git-plugin-manager/internal/plugin"
+	"ue-git-plugin-manager/internal/utils"
 )
 
 func main() {

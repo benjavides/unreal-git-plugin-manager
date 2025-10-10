@@ -223,7 +223,7 @@ func (m *Manager) GetPluginLinkPath(enginePath string) string {
 // CheckWriteAccess checks if we have write access to a directory
 func (m *Manager) CheckWriteAccess(path string) bool {
 	// Try to create a temporary file in the directory
-	tempFile := filepath.Join(path, ".ue-git-manager-test")
+	tempFile := filepath.Join(path, ".ue-git-plugin-manager-test")
 	file, err := os.Create(tempFile)
 	if err != nil {
 		return false

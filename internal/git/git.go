@@ -123,7 +123,6 @@ func (m *Manager) CreateEngineBranch(version, defaultBranch string) error {
 
 // CreateWorktree creates a worktree for an engine version
 func (m *Manager) CreateWorktree(version string) error {
-	branchName := fmt.Sprintf("engine-%s", version)
 	worktreePath := filepath.Join(m.worktreesDir, fmt.Sprintf("UE_%s", version))
 
 	// Create the worktrees directory if it doesn't exist
@@ -131,9 +130,39 @@ func (m *Manager) CreateWorktree(version string) error {
 		return fmt.Errorf("failed to create worktrees directory: %v", err)
 	}
 
-	cmd := exec.Command("git", "-C", m.originDir, "worktree", "add", worktreePath, branchName)
+	// Check if origin directory exists
+	if _, err := os.Stat(m.originDir); os.IsNotExist(err) {
+		return fmt.Errorf("origin directory does not exist: %s", m.originDir)
+	}
+
+	// Get the default branch (all worktrees use the same branch)
+	defaultBranch, err := m.GetDefaultBranch()
+	if err != nil {
+		defaultBranch = "dev"
+	}
+
+	// Make sure we're on the default branch in the origin repository
+	checkoutDefaultCmd := exec.Command("git", "-C", m.originDir, "checkout", defaultBranch)
+	if err := checkoutDefaultCmd.Run(); err != nil {
+		return fmt.Errorf("failed to checkout default branch: %v", err)
+	}
+
+	// Check if worktree already exists and remove it
+	if _, err := os.Stat(worktreePath); err == nil {
+		if err := os.RemoveAll(worktreePath); err != nil {
+			return fmt.Errorf("failed to remove existing worktree directory: %v", err)
+		}
+	}
+
+	// Create the worktree from the default branch
+	// Use --detach to avoid conflicts with the main repository
+	cmd := exec.Command("git", "-C", m.originDir, "worktree", "add", "--detach", worktreePath, defaultBranch)
 	output, err := cmd.Output()
 	if err != nil {
+		// Try to get stderr as well
+		if exitError, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("failed to create worktree: %v, stderr: %s", err, string(exitError.Stderr))
+		}
 		return fmt.Errorf("failed to create worktree: %v, output: %s", err, string(output))
 	}
 
