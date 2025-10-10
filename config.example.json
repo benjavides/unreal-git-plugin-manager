@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "base_dir": ".",
+  "origin_dir": "repo-origin",
+  "worktrees_dir": "worktrees",
+  "default_remote_branch": "dev",
+  "engines": [
+    {
+      "engine_path": "C:\\Program Files\\Epic Games\\UE_5.4",
+      "engine_version": "5.4",
+      "worktree_subdir": "UE_5.4",
+      "branch": "engine-5.4",
+      "plugin_link_path": "C:\\Program Files\\Epic Games\\UE_5.4\\Engine\\Plugins\\UEGitPlugin_PB",
+      "stock_plugin_disabled_by_tool": false
+    },
+    {
+      "engine_path": "C:\\Program Files\\Epic Games\\UE_5.5",
+      "engine_version": "5.5",
+      "worktree_subdir": "UE_5.5",
+      "branch": "engine-5.5",
+      "plugin_link_path": "C:\\Program Files\\Epic Games\\UE_5.5\\Engine\\Plugins\\UEGitPlugin_PB",
+      "stock_plugin_disabled_by_tool": true
+    }
+  ],
+  "custom_engine_roots": [
+    "D:\\Engines",
+    "E:\\Unreal\\UE"
+  ],
+  "last_run_utc": "2025-01-27T12:34:56Z"
+}
+
