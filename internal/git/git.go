@@ -271,15 +271,8 @@ func (m *Manager) RemoveWorktree(version string) error {
 		fmt.Printf("  ✅ Removed worktree\n")
 	}
 
-	// Remove the branch
-	branchName := fmt.Sprintf("engine-%s", version)
-	cmd = exec.Command("git", "-C", m.originDir, "branch", "-D", branchName)
-	if err := cmd.Run(); err != nil {
-		// Branch removal failure is not critical, just log it
-		fmt.Printf("  Warning: Failed to remove branch %s: %v\n", branchName, err)
-	} else {
-		fmt.Printf("  ✅ Removed branch %s\n", branchName)
-	}
+	// Note: We don't remove branches because all engines use the same default branch
+	// Each worktree is created with --detach from the default branch
 
 	return nil
 }

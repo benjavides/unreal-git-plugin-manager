@@ -58,9 +58,9 @@ func getUserConfigDir() string {
 	}
 
 	// Use the user's config directory
-	// On Windows: %APPDATA%\ue-git-plugin-manager\unreal_source_control
-	// On Linux/macOS: ~/.config/ue-git-plugin-manager/unreal_source_control
-	configDir := filepath.Join(usr.HomeDir, "AppData", "Roaming", "ue-git-plugin-manager", "unreal_source_control")
+	// On Windows: %APPDATA%\ue-git-plugin-manager
+	// On Linux/macOS: ~/.config/ue-git-plugin-manager
+	configDir := filepath.Join(usr.HomeDir, "AppData", "Roaming", "ue-git-plugin-manager")
 
 	// Create the directory if it doesn't exist
 	os.MkdirAll(configDir, 0755)

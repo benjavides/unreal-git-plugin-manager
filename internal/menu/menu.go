@@ -27,58 +27,20 @@ type Application interface {
 	GetDetection() *detection.Detector
 }
 
-// isFirstRun determines if this is truly a first run by checking if any engines have complete setups
-func isFirstRun(app Application) bool {
-	// If no config exists, it's definitely a first run
-	if !app.GetConfig().Exists() {
-		fmt.Println("🔍 No configuration found - treating as first run")
-		return true
-	}
-
-	// Load config to get custom engine roots
-	config, err := app.GetConfig().Load()
-	if err != nil {
-		// If we can't load config, treat as first run
-		fmt.Printf("🔍 Could not load configuration (%v) - treating as first run\n", err)
-		return true
-	}
-
-	// Use detection system to check if any engines have complete setups
-	statuses, err := app.GetDetection().DetectSetupStatus(config.CustomEngineRoots)
-	if err != nil {
-		// If detection fails, treat as first run to be safe
-		fmt.Printf("🔍 Could not detect setup status (%v) - treating as first run\n", err)
-		return true
-	}
-
-	// Check if any engine has a complete setup
-	completeSetups := 0
-	for _, status := range statuses {
-		if status.IsSetupComplete {
-			completeSetups++
-		}
-	}
-
-	if completeSetups == 0 {
-		fmt.Printf("🔍 No engines with complete setups found (%d engines detected) - treating as first run\n", len(statuses))
-		return true
-	}
-
-	fmt.Printf("🔍 Found %d engine(s) with complete setups - not a first run\n", completeSetups)
-	return false
-}
-
 // Run starts the main menu system
 func Run(app Application) error {
 	for {
-		// Check if this is truly a first run by looking at actual setup status
-		if isFirstRun(app) {
-			return runFirstTimeSetup(app)
-		}
-
 		config, err := app.GetConfig().Load()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %v", err)
+			// If no config exists, create a default one
+			if !app.GetConfig().Exists() {
+				config = app.GetConfig().CreateDefault()
+				if err := app.GetConfig().Save(config); err != nil {
+					return fmt.Errorf("failed to create default config: %v", err)
+				}
+			} else {
+				return fmt.Errorf("failed to load config: %v", err)
+			}
 		}
 
 		choice, err := showMainMenu(app, config)
@@ -235,269 +197,6 @@ func GetStockPluginStatusIcon(status string) string {
 	}
 }
 
-// runFirstTimeSetup handles the first-time setup flow
-func runFirstTimeSetup(app Application) error {
-	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🎮 UE Git Plugin Manager - Setup"))
-	fmt.Println()
-
-	// Check if we have a config but no complete setups
-	if app.GetConfig().Exists() {
-		fmt.Println("📋 Configuration file found, but no engines have complete setups.")
-		fmt.Println("This may be due to:")
-		fmt.Println("  • Previous setup was incomplete")
-		fmt.Println("  • Files were moved or deleted")
-		fmt.Println("  • Setup was partially broken")
-		fmt.Println()
-		fmt.Println("We'll help you set up or repair your engines.")
-		fmt.Println()
-	}
-
-	// Step 0: Check administrator privileges
-	if !app.GetUtils().IsRunningAsAdmin() {
-		fmt.Println(color.New(color.FgRed).Sprint("❌ Administrator privileges required!"))
-		fmt.Println()
-		fmt.Println("This setup process needs administrator privileges to:")
-		fmt.Println("• Create junctions in Unreal Engine directories")
-		fmt.Println("• Clone the plugin repository")
-		fmt.Println("• Set up worktrees")
-		fmt.Println()
-		app.GetUtils().RequestAdminElevation()
-		return fmt.Errorf("administrator privileges required")
-	}
-	fmt.Println(color.New(color.FgGreen).Sprint("✅ Running with administrator privileges"))
-	fmt.Println()
-
-	// Step 1: Check Git availability
-	if !app.GetGit().IsGitAvailable() {
-		fmt.Println(color.New(color.FgRed).Sprint("❌ Git is not available in PATH"))
-		fmt.Println("Please install Git for Windows and restart this application.")
-		fmt.Println()
-		if utils.Confirm("Would you like to open the Git download page?") {
-			utils.OpenURL("https://git-scm.com/download/win")
-		}
-		return fmt.Errorf("Git not available")
-	}
-
-	gitVersion, err := app.GetGit().GetGitVersion()
-	if err != nil {
-		return fmt.Errorf("failed to get Git version: %v", err)
-	}
-	fmt.Printf("✅ Git found: %s\n", gitVersion)
-	fmt.Println()
-
-	// Step 2: Detect engines
-	fmt.Println("🔍 Detecting Unreal Engine installations...")
-	engines, err := app.GetEngine().DiscoverEngines([]string{})
-	if err != nil {
-		return fmt.Errorf("failed to discover engines: %v", err)
-	}
-
-	if len(engines) == 0 {
-		fmt.Println("❌ No Unreal Engine installations found")
-		fmt.Println("Please install Unreal Engine or add custom engine paths in Advanced settings.")
-		return fmt.Errorf("no engines found")
-	}
-
-	// Show detected engines
-	fmt.Printf("Found %d Unreal Engine installation(s):\n", len(engines))
-	for i, eng := range engines {
-		status := ""
-		if !eng.Valid {
-			status = "❌ "
-		}
-		fmt.Printf("  %d. %s%s (Version %s)\n", i+1, status, eng.Path, eng.Version)
-	}
-	fmt.Println()
-
-	// Let user select engines
-	selectedEngines := selectEngines(app, engines, nil)
-	if len(selectedEngines) == 0 {
-		return fmt.Errorf("no engines selected")
-	}
-
-	// Step 3: Clone origin repository
-	fmt.Println("📥 Cloning UEGitPlugin repository...")
-	if err := app.GetGit().CloneOrigin(); err != nil {
-		return fmt.Errorf("failed to clone repository: %v", err)
-	}
-	fmt.Println("✅ Repository cloned successfully")
-	fmt.Println()
-
-	// Step 4: Get default branch
-	fmt.Println("🌿 Determining default branch...")
-	defaultBranch, err := app.GetGit().GetDefaultBranch()
-	if err != nil {
-		return fmt.Errorf("failed to get default branch: %v", err)
-	}
-	fmt.Printf("✅ Using branch: %s\n", defaultBranch)
-	fmt.Println()
-
-	// Step 5: Set up each selected engine
-	var config *config.Config
-	if app.GetConfig().Exists() {
-		// Load existing config
-		var err error
-		config, err = app.GetConfig().Load()
-		if err != nil {
-			fmt.Printf("Warning: Could not load existing config (%v), creating new one\n", err)
-			config = app.GetConfig().CreateDefault()
-		}
-		config.DefaultRemoteBranch = defaultBranch
-	} else {
-		// Create new config
-		config = app.GetConfig().CreateDefault()
-		config.DefaultRemoteBranch = defaultBranch
-	}
-
-	for _, eng := range selectedEngines {
-		fmt.Printf("🔧 Setting up UE %s...\n", eng.Version)
-
-		if err := setupEngine(app, config, eng, defaultBranch); err != nil {
-			fmt.Printf("❌ Failed to set up UE %s: %v\n", eng.Version, err)
-			continue
-		}
-
-		fmt.Printf("✅ UE %s set up successfully\n", eng.Version)
-	}
-
-	// Step 6: Save configuration
-	if err := app.GetConfig().Save(config); err != nil {
-		return fmt.Errorf("failed to save configuration: %v", err)
-	}
-
-	// Validate setup using detection system
-	fmt.Println()
-	fmt.Println("🔍 Validating setup...")
-	statuses, err := app.GetDetection().DetectSetupStatus(config.CustomEngineRoots)
-	if err != nil {
-		fmt.Printf("Warning: Could not validate setup: %v\n", err)
-	} else {
-		allComplete := true
-		brokenEngines := 0
-		for _, status := range statuses {
-			if !status.IsSetupComplete {
-				allComplete = false
-				if status.IsBroken {
-					brokenEngines++
-					fmt.Printf("⚠️  UE %s setup is broken: %s\n", status.EngineVersion, strings.Join(status.Issues, ", "))
-				}
-				// Don't show messages for engines that were never set up (IsNeverSetUp = true)
-			}
-		}
-
-		if allComplete {
-			fmt.Println("✅ All engines validated successfully!")
-		} else if brokenEngines > 0 {
-			fmt.Printf("⚠️  %d engine(s) have broken setups that need repair.\n", brokenEngines)
-		}
-	}
-
-	fmt.Println()
-	fmt.Println(color.New(color.FgGreen, color.Bold).Sprint("🎉 Setup completed successfully!"))
-	fmt.Println("You can now use the plugin in Unreal Engine.")
-	utils.Pause()
-
-	return nil
-}
-
-// selectEngines allows the user to select which engines to set up
-func selectEngines(app Application, engines []engine.EngineInfo, cfg *config.Config) []engine.EngineInfo {
-	var selected []engine.EngineInfo
-
-	for _, eng := range engines {
-		if !eng.Valid {
-			continue // Skip invalid engines
-		}
-
-		// Check if this engine already has a complete setup
-		status := app.GetDetection().DetectEngineSetupStatus(eng.Path, eng.Version)
-		if status.IsSetupComplete {
-			fmt.Printf("✅ UE %s already has complete setup - skipping\n", eng.Version)
-			continue
-		}
-
-		// Show status and ask if user wants to set up/repair
-		statusText := "set up"
-		if status.IsBroken {
-			statusText = "repair"
-			fmt.Printf("⚠️  UE %s setup is broken: %s\n", eng.Version, strings.Join(status.Issues, ", "))
-		} else if status.IsNeverSetUp {
-			// Don't show issues for engines that were never set up
-			fmt.Printf("ℹ️  UE %s has not been set up yet\n", eng.Version)
-		}
-
-		message := fmt.Sprintf("%s UE %s at %s?", strings.Title(statusText), eng.Version, eng.Path)
-		if utils.Confirm(message) {
-			selected = append(selected, eng)
-		}
-	}
-
-	return selected
-}
-
-// setupEngine sets up a single engine
-func setupEngine(app Application, cfg *config.Config, eng engine.EngineInfo, defaultBranch string) error {
-	// Create engine branch
-	fmt.Printf("  Creating engine branch for UE %s... ", eng.Version)
-	if err := app.GetGit().CreateEngineBranch(eng.Version, defaultBranch); err != nil {
-		fmt.Printf("❌\n")
-		return fmt.Errorf("failed to create engine branch: %v", err)
-	}
-	fmt.Printf("✅\n")
-
-	// Create worktree
-	fmt.Printf("  Creating worktree for UE %s... ", eng.Version)
-	if err := app.GetGit().CreateWorktree(eng.Version); err != nil {
-		fmt.Printf("❌\n")
-		return fmt.Errorf("failed to create worktree: %v", err)
-	}
-	fmt.Printf("✅\n")
-
-	// Create junction
-	worktreePath := app.GetGit().GetWorktreePath(eng.Version)
-	fmt.Printf("  Creating junction for UE %s... ", eng.Version)
-	if err := app.GetPlugin().CreateJunction(eng.Path, worktreePath); err != nil {
-		fmt.Printf("❌\n")
-		return fmt.Errorf("failed to create junction: %v", err)
-	}
-	fmt.Printf("✅\n")
-
-	// Build the plugin for this engine
-	fmt.Printf("  Building plugin for UE %s... ", eng.Version)
-	if err := app.GetPlugin().BuildForEngine(eng.Path, worktreePath); err != nil {
-		fmt.Printf("❌\n")
-		return fmt.Errorf("failed to build plugin: %v", err)
-	}
-	fmt.Printf("✅\n")
-
-	// Check for plugin collision and track if we disable the stock plugin
-	stockPluginDisabledByTool := false
-	if app.GetEngine().CheckPluginCollision(eng.Path) {
-		fmt.Printf("⚠️  Plugin collision detected for UE %s\n", eng.Version)
-		if utils.Confirm("Would you like to disable the stock Git plugin? (Recommended)") {
-			if err := app.GetEngine().DisableStockPlugin(eng.Path); err != nil {
-				fmt.Printf("Warning: Failed to disable stock plugin: %v\n", err)
-			} else {
-				fmt.Printf("✅ Stock Git plugin disabled for UE %s\n", eng.Version)
-				stockPluginDisabledByTool = true
-			}
-		}
-	}
-
-	// Add to configuration
-	engineConfig := config.Engine{
-		EnginePath:                eng.Path,
-		EngineVersion:             eng.Version,
-		WorktreeSubdir:            fmt.Sprintf("UE_%s", eng.Version),
-		Branch:                    fmt.Sprintf("engine-%s", eng.Version),
-		PluginLinkPath:            app.GetPlugin().GetPluginLinkPath(eng.Path),
-		StockPluginDisabledByTool: stockPluginDisabledByTool,
-	}
-	app.GetConfig().AddEngine(cfg, engineConfig)
-
-	return nil
-}
-
 // runUpdate handles the update flow
 func runUpdate(app Application, config *config.Config) error {
 	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🔄 Checking for updates..."))
@@ -571,83 +270,6 @@ func runUpdate(app Application, config *config.Config) error {
 
 	fmt.Println()
 	fmt.Println("🎉 Updates completed!")
-	utils.Pause()
-	return nil
-}
-
-// runSetupNewEngine handles setting up a new engine version
-func runSetupNewEngine(app Application, config *config.Config) error {
-	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🔧 Set up a new engine version"))
-	fmt.Println()
-
-	// Check administrator privileges
-	if !app.GetUtils().IsRunningAsAdmin() {
-		fmt.Println(color.New(color.FgRed).Sprint("❌ Administrator privileges required!"))
-		fmt.Println()
-		fmt.Println("Setting up new engines requires administrator privileges to create junctions.")
-		fmt.Println()
-		app.GetUtils().RequestAdminElevation()
-		return fmt.Errorf("administrator privileges required")
-	}
-
-	// Discover engines
-	engines, err := app.GetEngine().DiscoverEngines(config.CustomEngineRoots)
-	if err != nil {
-		return fmt.Errorf("failed to discover engines: %v", err)
-	}
-
-	// Filter out already managed engines
-	var newEngines []engine.EngineInfo
-	for _, eng := range engines {
-		if !eng.Valid {
-			continue
-		}
-
-		// Check if already managed
-		alreadyManaged := false
-		for _, managedEng := range config.Engines {
-			if managedEng.EnginePath == eng.Path {
-				alreadyManaged = true
-				break
-			}
-		}
-
-		if !alreadyManaged {
-			newEngines = append(newEngines, eng)
-		}
-	}
-
-	if len(newEngines) == 0 {
-		fmt.Println("✅ No new engines found to set up.")
-		utils.Pause()
-		return nil
-	}
-
-	// Let user select engines
-	selectedEngines := selectEngines(app, newEngines, config)
-	if len(selectedEngines) == 0 {
-		return nil
-	}
-
-	// Set up selected engines
-	for _, eng := range selectedEngines {
-		fmt.Printf("🔧 Setting up UE %s...\n", eng.Version)
-
-		if err := setupEngine(app, config, eng, config.DefaultRemoteBranch); err != nil {
-			fmt.Printf("❌ Failed to set up UE %s: %v\n", eng.Version, err)
-			continue
-		}
-
-		fmt.Printf("✅ UE %s set up successfully\n", eng.Version)
-	}
-
-	// Save configuration
-	if err := app.GetConfig().Save(config); err != nil {
-		return fmt.Errorf("failed to save configuration: %v", err)
-	}
-
-	fmt.Println()
-	fmt.Println("🎉 New engines set up successfully!")
 	utils.Pause()
 	return nil
 }
@@ -1145,15 +767,15 @@ func runSetupForEngine(app Application, config *config.Config, enginePath, engin
 		return fmt.Errorf("failed to create worktree: %v", err)
 	}
 
-	// Build plugin
+	// Create junction (needed before building)
 	worktreePath := app.GetGit().GetWorktreePath(engineVersion)
-	if err := app.GetPlugin().BuildForEngine(enginePath, worktreePath); err != nil {
-		return fmt.Errorf("failed to build plugin: %v", err)
+	if err := app.GetPlugin().CreateJunction(enginePath, worktreePath); err != nil {
+		return fmt.Errorf("failed to create junction: %v", err)
 	}
 
-	// Create junction
-	if err := app.GetPlugin().CreateJunction(enginePath, app.GetGit().GetWorktreePath(engineVersion)); err != nil {
-		return fmt.Errorf("failed to create junction: %v", err)
+	// Build plugin
+	if err := app.GetPlugin().BuildForEngine(enginePath, worktreePath); err != nil {
+		return fmt.Errorf("failed to build plugin: %v", err)
 	}
 
 	// Disable stock plugin
@@ -1221,15 +843,7 @@ func runRepairForEngine(app Application, config *config.Config, enginePath, engi
 		}
 	}
 
-	// Rebuild plugin if binaries missing
-	if !status.BinariesExist {
-		worktreePath := app.GetGit().GetWorktreePath(engineVersion)
-		if err := app.GetPlugin().BuildForEngine(enginePath, worktreePath); err != nil {
-			return fmt.Errorf("failed to build plugin: %v", err)
-		}
-	}
-
-	// Recreate junction if missing or invalid
+	// Recreate junction if missing or invalid (needed before building)
 	if !status.JunctionExists || !status.JunctionValid {
 		// Remove existing junction first
 		pluginLinkPath := app.GetPlugin().GetPluginLinkPath(enginePath)
@@ -1238,6 +852,14 @@ func runRepairForEngine(app Application, config *config.Config, enginePath, engi
 		// Create new junction
 		if err := app.GetPlugin().CreateJunction(enginePath, app.GetGit().GetWorktreePath(engineVersion)); err != nil {
 			return fmt.Errorf("failed to create junction: %v", err)
+		}
+	}
+
+	// Rebuild plugin if binaries missing
+	if !status.BinariesExist {
+		worktreePath := app.GetGit().GetWorktreePath(engineVersion)
+		if err := app.GetPlugin().BuildForEngine(enginePath, worktreePath); err != nil {
+			return fmt.Errorf("failed to build plugin: %v", err)
 		}
 	}
 
@@ -1362,7 +984,7 @@ func ShowWhatIsThis() {
 	fmt.Println()
 	fmt.Println("4. File System:")
 	fmt.Println("   • User has write access to UE installation directories")
-	fmt.Println("   • User config directory is accessible (%APPDATA%\\ue-git-plugin-manager\\unreal_source_control)")
+	fmt.Println("   • User config directory is accessible (%APPDATA%\\ue-git-plugin-manager)")
 	fmt.Println("   • No antivirus interference with junction creation")
 	fmt.Println()
 	fmt.Println("If any of these assumptions change, the tool may need updates.")

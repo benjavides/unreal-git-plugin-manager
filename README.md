@@ -1,6 +1,20 @@
 # UE Git Plugin Manager
 
-A Windows CLI tool for managing the UEGitPlugin across multiple Unreal Engine installations.
+> A Windows CLI tool that automates the setup and management of the [UEGitPlugin](https://github.com/ProjectBorealis/UEGitPlugin) across multiple Unreal Engine installations.
+
+![screenshot](./assets/screenshot.png)
+
+## Why Use This Tool?
+
+Setting up Git source control in Unreal Engine manually is complex and error-prone. It involves:
+
+- Cloning the UEGitPlugin repository
+- Building the plugin against each UE version
+- Creating Windows junctions to link the plugin into engine directories
+- Managing conflicts with the stock Git plugin
+- Keeping everything updated across multiple engine versions
+
+This tool automates all of these steps, saving time and reducing errors for teams working with multiple Unreal Engine versions.
 
 ## Features
 
@@ -8,149 +22,92 @@ A Windows CLI tool for managing the UEGitPlugin across multiple Unreal Engine in
 - **Automatic plugin linking** using Windows junctions
 - **Update management** with commit tracking and browser integration
 - **Collision detection** and resolution for stock Git plugins
-- **Relocation support** when moving the executable
-- **Comprehensive diagnostics** and error handling
+- **Per-engine configuration** and management
+- **Silent operation** - no annoying beeps or sounds
 
 ## Requirements
 
 - Windows 10/11
 - Git for Windows (must be in PATH)
-- Administrator privileges (for plugin installation)
-- Unreal Engine 5.3+ installations
+- Unreal Engine 5.3+ (one or more installations)
+- No administrator privileges required on modern Windows
 
 ## Installation
 
-1. Download the latest release or build from source
-2. Extract `UE-Git-Plugin-Manager.exe` to a permanent location
-3. **Right-click `UE-Git-Plugin-Manager.exe` and select "Run as administrator"**
-   - This is required for creating junctions in Unreal Engine directories
+1. Download the latest release from [GitHub Releases](https://github.com/benjavides/ue-git-plugin-manager/releases)
+2. Extract `UE-Git-Plugin-Manager.exe` to any location
+3. Run the executable
 
-## Building from Source
+## Quick Start
 
-### Prerequisites
-1. **Install Go 1.21+**: Download from https://golang.org/dl/
-2. **Install Git for Windows**: Download from https://git-scm.com/download/win
-3. **Restart Command Prompt** after installing Go
+1. **Run the tool**
+   ```cmd
+   UE-Git-Plugin-Manager.exe
+   ```
 
-### Build Options
+2. **Set up an engine**
+   - Select "Edit Setup"
+   - Choose an engine version from the list
+   - Click "Install Setup"
+   - The tool handles everything automatically:
+     - Clones the UEGitPlugin repository
+     - Creates a worktree for the engine version
+     - Builds the plugin against the engine
+     - Creates a junction to link the plugin
+     - Disables the stock Git plugin (recommended)
 
-#### Option 1: Automated Build (Recommended)
-```cmd
-build.bat
-```
-
-#### Option 2: PowerShell Build
-```powershell
-.\build.ps1
-```
-
-#### Option 3: Manual Build
-```cmd
-go mod init ue-git-plugin-manager
-go mod tidy
-go build -o UE-Git-Plugin-Manager.exe .
-```
-
-### Troubleshooting
-- **"Go not recognized"**: Install Go and restart Command Prompt
-- **"missing go.sum entry"**: Run `go mod tidy`
-- **"git: command not found"**: Install Git for Windows
-- **Build fails**: Try running as Administrator
-
-See [SETUP_INSTRUCTIONS.md](SETUP_INSTRUCTIONS.md) for detailed troubleshooting.
-
-## Usage
-
-### First Time Setup
-
-1. Run `UE-Git-Manager.exe`
-2. The tool will detect your Unreal Engine installations
-3. Select which engines to set up
-4. The tool will clone the UEGitPlugin repository and create worktrees
-5. Plugin junctions will be created automatically
-
-### Updating Plugins
-
-1. Run the tool and select "Update"
-2. View available updates with commit information
-3. Click "Update now" to apply updates
-
-### Managing Engines
-
-- **Set up a new engine version**: Add support for newly installed engines
-- **Uninstall**: Remove all plugin links and worktrees
-- **Advanced**: Configure scan roots, change tracked branch, run diagnostics
+3. **Use Git in Unreal Engine**
+   - Open your project in Unreal Engine
+   - The Git source control should now be available
+   - You can commit, push, pull, and manage branches directly in the editor
 
 ## How It Works
 
-The tool uses a sophisticated Git worktree system:
+The tool creates a streamlined setup by:
 
-1. **Origin Repository**: Single clone of the UEGitPlugin repository
-2. **Worktrees**: Separate working directories for each engine version
-3. **Junctions**: Windows symbolic links connecting engines to worktrees
-4. **Branch Management**: Each engine gets its own branch tracking the remote
+1. **Repository Management**: Clones the UEGitPlugin repository once to a central location
+2. **Worktrees**: Creates separate working directories for each UE version (all using the same codebase)
+3. **Plugin Building**: Builds the plugin against each specific Unreal Engine version
+4. **Junction Linking**: Creates Windows junctions to link the built plugin into each engine's plugin directory
+5. **Conflict Resolution**: Automatically detects and resolves conflicts with the stock Git plugin
 
-## Configuration
+This approach ensures each engine gets a properly built plugin while sharing the same source code and updates.
 
-Configuration is stored in `config.json` next to the executable:
+## Updating
 
-```json
-{
-  "version": 1,
-  "base_dir": ".",
-  "origin_dir": "repo-origin",
-  "worktrees_dir": "worktrees",
-  "default_remote_branch": "dev",
-  "engines": [...],
-  "custom_engine_roots": [...]
-}
-```
+The tool automatically checks for updates:
+
+- Shows how many commits behind your setup is
+- Displays local and remote commit SHAs
+- Provides a GitHub compare URL to see what's changed
+- Only rebuilds when updates are actually available
+
+To update, go to "Edit Setup" → Select an engine → "Update Setup".
+
+## Managing Multiple Engines
+
+You can set up the plugin for multiple Unreal Engine versions:
+
+- Each version gets its own worktree and build
+- All versions share the same source code and updates
+- Manage each engine independently
+- Easy to add or remove engines as needed
 
 ## Troubleshooting
 
-### Git Not Found
-- Install Git for Windows from https://git-scm.com/download/win
-- Ensure Git is in your system PATH
+**"Git not found"**: Install Git for Windows and ensure it's in your PATH
 
-### Permission Denied
-- Run the tool as Administrator
-- Check that Unreal Engine directories are writable
+**"No engines found"**: The tool looks in standard UE installation paths. Add custom paths in Settings if needed
 
-### Plugin Not Loading
-- Check the Diagnostics menu
-- Verify junctions are pointing to correct worktrees
-- Ensure no plugin name collisions
+**Plugin not working**: Check that the junction was created correctly and the stock Git plugin is disabled
 
-### Relocation Issues
-- If you move the executable, use the Relocate option
-- This will update all paths and junctions automatically
+**Build errors**: Ensure you have the correct Visual Studio components installed for your UE version
 
-## Project Structure
+## Credits
 
-```
-UE-Git-Manager.exe
-config.json
-logs/
-repo-origin/          # Git repository
-worktrees/
-  UE_5.3/            # Worktree for UE 5.3
-  UE_5.4/            # Worktree for UE 5.4
-  UE_5.5/            # Worktree for UE 5.5
-```
+- [Project Borealis](https://github.com/ProjectBorealis/UEGitPlugin) for the UEGitPlugin
+- Built with Go and [promptui](https://github.com/manifoldco/promptui) for the CLI interface
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly on Windows
-5. Submit a pull request
-
-## Acknowledgments
-
-- [Project Borealis](https://github.com/ProjectBorealis/UEGitPlugin) for the UEGitPlugin
-- The Unreal Engine community for feedback and testing
+This project is open source. See the repository for license details.

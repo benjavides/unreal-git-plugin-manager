@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/fs"
@@ -32,63 +33,120 @@ func (m *Manager) CreateJunction(enginePath, worktreePath string) error {
 		return fmt.Errorf("insufficient permissions to create junction in %s - please run as administrator", filepath.Join(enginePath, "Engine", "Plugins"))
 	}
 
-	// Remove existing junction if it exists
-	if m.JunctionExists(pluginLinkPath) {
+	// Check what's actually at the path using dir command (more reliable for junctions)
+	fmt.Printf("  Checking for existing junction at: %s\n", pluginLinkPath)
+
+	// Use dir command to check if the junction exists (more reliable than os.Stat for broken junctions)
+	pluginsDir := filepath.Join(enginePath, "Engine", "Plugins")
+	dirCmd := exec.Command("cmd", "/c", "dir", pluginsDir)
+	dirOutput, dirErr := dirCmd.Output()
+
+	junctionExists := false
+	if dirErr == nil {
+		dirStr := string(dirOutput)
+		fmt.Printf("  📁 Dir output analysis:\n")
+		fmt.Printf("    Contains <JUNCTION>: %t\n", strings.Contains(dirStr, "<JUNCTION>"))
+		fmt.Printf("    Contains UEGitPlugin_PB: %t\n", strings.Contains(dirStr, "UEGitPlugin_PB"))
+
+		// Look for the specific junction in the dir output
+		if strings.Contains(dirStr, "<JUNCTION>") && strings.Contains(dirStr, "UEGitPlugin_PB") {
+			junctionExists = true
+			fmt.Printf("  📁 Junction found in dir output: UEGitPlugin_PB\n")
+		} else {
+			fmt.Printf("  📁 No junction found in dir output\n")
+		}
+	} else {
+		fmt.Printf("  ❌ Dir command failed: %v\n", dirErr)
+	}
+
+	// Also try our detection methods
+	if fileInfo, err := os.Stat(pluginLinkPath); err == nil {
+		fmt.Printf("  📁 Path exists via os.Stat: isDir=%t, mode=%s\n", fileInfo.IsDir(), fileInfo.Mode())
+	} else {
+		fmt.Printf("  📁 Path does not exist via os.Stat: %v\n", err)
+	}
+
+	// Use the more reliable detection method
+	if junctionExists || m.JunctionExists(pluginLinkPath) {
+		fmt.Printf("  ✅ Existing junction found, removing...\n")
 		if err := m.RemoveJunction(pluginLinkPath); err != nil {
 			return fmt.Errorf("failed to remove existing junction: %v", err)
 		}
+		fmt.Printf("  ✅ Existing junction removed\n")
+	} else {
+		fmt.Printf("  ✅ No existing junction found\n")
 	}
-
-	// Debug: print detailed information before attempting junction creation
-	fmt.Printf("Debug - Junction creation details:\n")
-	fmt.Printf("  Engine path: %s\n", enginePath)
-	fmt.Printf("  Worktree path: %s\n", worktreePath)
-	fmt.Printf("  Plugin link path: %s\n", pluginLinkPath)
 
 	// Verify worktree exists
 	if _, err := os.Stat(worktreePath); err != nil {
 		return fmt.Errorf("worktree path does not exist: %s", worktreePath)
 	}
-	fmt.Printf("  ✅ Worktree exists\n")
 
 	// Verify plugins directory exists
-	pluginsDir := filepath.Join(enginePath, "Engine", "Plugins")
-	if _, err := os.Stat(pluginsDir); err != nil {
-		return fmt.Errorf("plugins directory does not exist: %s", pluginsDir)
+	pluginsDirForStat := filepath.Join(enginePath, "Engine", "Plugins")
+	if _, err := os.Stat(pluginsDirForStat); err != nil {
+		return fmt.Errorf("plugins directory does not exist: %s", pluginsDirForStat)
 	}
-	fmt.Printf("  ✅ Plugins directory exists\n")
 
 	// Test write access
-	if !m.CheckWriteAccess(pluginsDir) {
-		return fmt.Errorf("no write access to plugins directory: %s", pluginsDir)
+	if !m.CheckWriteAccess(pluginsDirForStat) {
+		return fmt.Errorf("no write access to plugins directory: %s", pluginsDirForStat)
 	}
-	fmt.Printf("  ✅ Write access confirmed\n")
+
+	// Double-check the path right before creating the junction
+	if _, err := os.Stat(pluginLinkPath); err == nil {
+		return fmt.Errorf("path still exists after removal attempts: %s", pluginLinkPath)
+	}
 
 	// Create the junction using mklink
-	fmt.Printf("  Executing: mklink /J \"%s\" \"%s\"\n", pluginLinkPath, worktreePath)
-	cmd := exec.Command("cmd", "/c", "mklink", "/J", pluginLinkPath, worktreePath)
-	output, err := cmd.Output()
-	outputStr := string(output)
+	// Try /D first (directory symbolic link), fall back to /J (junction) if that fails
+	mklinkCmd := exec.Command("cmd", "/c", "mklink", "/D", pluginLinkPath, worktreePath)
 
-	// Debug: print command result
-	fmt.Printf("  Command exit code: %v\n", err)
-	fmt.Printf("  Command output: %s\n", outputStr)
+	// Capture both stdout and stderr
+	var stdout, stderr bytes.Buffer
+	mklinkCmd.Stdout = &stdout
+	mklinkCmd.Stderr = &stderr
+
+	err := mklinkCmd.Run()
+	outputStr := stdout.String()
+	errorStr := stderr.String()
 
 	// Check if the command actually succeeded by looking at the output
 	// mklink returns exit code 0 and shows "Junction created for..." when successful
 	if err != nil {
+		// Combine stdout and stderr for error analysis
+		combinedOutput := outputStr + errorStr
+
 		// Provide more specific error messages
-		if strings.Contains(outputStr, "Access is denied") || strings.Contains(outputStr, "access denied") {
+		if strings.Contains(combinedOutput, "Access is denied") || strings.Contains(combinedOutput, "access denied") {
 			return fmt.Errorf("access denied - please run as administrator to create junctions in %s", enginePath)
 		}
-		if strings.Contains(outputStr, "The system cannot find the path specified") {
+		if strings.Contains(combinedOutput, "The system cannot find the path specified") {
 			return fmt.Errorf("target path not found: %s", worktreePath)
 		}
-		return fmt.Errorf("failed to create junction: %v, output: %s", err, outputStr)
+		if strings.Contains(combinedOutput, "Cannot create a file when that file already exists") {
+			return fmt.Errorf("junction already exists at %s - this should have been removed first", pluginLinkPath)
+		}
+		return fmt.Errorf("failed to create junction: %v, output: %s, error: %s", err, outputStr, errorStr)
 	}
 
 	// Verify the junction was actually created
-	if !strings.Contains(outputStr, "Junction created for") {
+	// Check for both junction and symbolic link success messages
+	successMessages := []string{
+		"Junction created for",
+		"symbolic link created for",
+		"created for",
+	}
+
+	success := false
+	for _, msg := range successMessages {
+		if strings.Contains(outputStr, msg) {
+			success = true
+			break
+		}
+	}
+
+	if !success {
 		return fmt.Errorf("junction creation may have failed - unexpected output: %s", outputStr)
 	}
 
@@ -97,13 +155,26 @@ func (m *Manager) CreateJunction(enginePath, worktreePath string) error {
 
 // JunctionExists checks if a junction exists at the given path
 func (m *Manager) JunctionExists(path string) bool {
-	_, err := os.Stat(path)
+	// First check if the path exists at all
+	fileInfo, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return false
 	}
 
-	// Check if it's actually a junction by trying to read its target
-	return m.IsJunction(path)
+	// If it exists, check if it's a directory (junctions appear as directories)
+	if !fileInfo.IsDir() {
+		return false
+	}
+
+	// Try the simple method first (works better with broken junctions)
+	isJunction := m.IsJunctionSimple(path)
+
+	// If simple method fails, try the Windows API method
+	if !isJunction {
+		isJunction = m.IsJunction(path)
+	}
+
+	return isJunction
 }
 
 // IsJunction checks if a path is a junction (reparse point)
@@ -145,6 +216,19 @@ func (m *Manager) IsJunction(path string) bool {
 	return err == nil
 }
 
+// IsJunctionSimple uses a simpler method to detect junctions
+func (m *Manager) IsJunctionSimple(path string) bool {
+	// Use fsutil to check if it's a junction
+	cmd := exec.Command("fsutil", "reparsepoint", "query", path)
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	// If fsutil returns output, it's a reparse point
+	return len(output) > 0
+}
+
 // RemoveJunction removes a junction
 func (m *Manager) RemoveJunction(path string) error {
 	if !m.JunctionExists(path) {
@@ -153,46 +237,84 @@ func (m *Manager) RemoveJunction(path string) error {
 
 	// Use rmdir to remove the junction
 	cmd := exec.Command("cmd", "/c", "rmdir", path)
-	output, err := cmd.Output()
+
+	// Capture both stdout and stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	outputStr := stdout.String()
+	errorStr := stderr.String()
+
 	if err != nil {
-		return fmt.Errorf("failed to remove junction: %v, output: %s", err, string(output))
+		return fmt.Errorf("failed to remove junction: %v, output: %s, error: %s", err, outputStr, errorStr)
 	}
 
 	return nil
 }
 
-// GetJunctionTarget gets the target path of a junction
+// ForceRemovePath attempts to remove a path using multiple methods
+func (m *Manager) ForceRemovePath(path string) error {
+	// Try rmdir first (for junctions)
+	cmd := exec.Command("cmd", "/c", "rmdir", path)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	if err == nil {
+		return nil
+	}
+
+	// Try rmdir /s /q (for directories with contents)
+	cmd = exec.Command("cmd", "/c", "rmdir", "/s", "/q", path)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+
+	if err == nil {
+		return nil
+	}
+
+	return fmt.Errorf("all removal methods failed")
+}
+
+// GetJunctionTarget gets the target path of a junction or symbolic link
 func (m *Manager) GetJunctionTarget(path string) (string, error) {
-	if !m.IsJunction(path) {
-		return "", fmt.Errorf("path is not a junction")
+	// Check if it's either a junction or symbolic link
+	if !m.IsJunction(path) && !m.IsJunctionSimple(path) {
+		return "", fmt.Errorf("path is not a junction or symbolic link")
 	}
 
-	// Use fsutil to get junction target (more reliable than dir command)
-	cmd := exec.Command("fsutil", "reparsepoint", "query", path)
+	// Try using Go's built-in Readlink function first (simpler approach)
+	target, err := os.Readlink(path)
+	if err == nil {
+		return target, nil
+	}
+
+	// Fallback: try using dir command to get the target
+	cmd := exec.Command("cmd", "/c", "dir", path)
 	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
+	dirStr := string(output)
 
-	// Parse the output to extract the target path
-	// The output format includes "Substitute Name: <target_path>"
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "Substitute Name:") {
-			// Extract the path after "Substitute Name:"
-			parts := strings.SplitN(line, "Substitute Name:", 2)
-			if len(parts) > 1 {
-				target := strings.TrimSpace(parts[1])
-				// Remove the \??\ prefix if present
-				if strings.HasPrefix(target, "\\??\\") {
-					target = target[4:]
+	if err == nil {
+		// Look for the target in the dir output (format: <JUNCTION> UEGitPlugin_PB [target_path])
+		lines := strings.Split(dirStr, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "UEGitPlugin_PB") && strings.Contains(line, "[") && strings.Contains(line, "]") {
+				// Extract the target path between [ and ]
+				start := strings.Index(line, "[")
+				end := strings.Index(line, "]")
+				if start != -1 && end != -1 && end > start {
+					target := strings.TrimSpace(line[start+1 : end])
+					return target, nil
 				}
-				return target, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("could not parse junction target")
+	return "", fmt.Errorf("could not parse junction/symbolic link target")
 }
 
 // VerifyJunction verifies that a junction points to the correct worktree

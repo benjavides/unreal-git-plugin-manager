@@ -37,7 +37,7 @@ if not exist "dist" mkdir dist
 REM Check if UE-Git-Plugin-Manager.exe is running and stop it
 tasklist /FI "IMAGENAME eq UE-Git-Plugin-Manager.exe" 2>NUL | find /I /N "UE-Git-Plugin-Manager.exe">NUL
 if "%ERRORLEVEL%"=="0" (
-    echo ⚠️  UE-Git-Plugin-Manager.exe is currently running. Stopping it...
+    echo UE-Git-Plugin-Manager.exe is currently running. Stopping it...
     taskkill /F /IM UE-Git-Plugin-Manager.exe >NUL 2>&1
     timeout /t 2 >NUL
 )
