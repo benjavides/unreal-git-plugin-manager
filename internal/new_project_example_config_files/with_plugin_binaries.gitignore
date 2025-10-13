@@ -1,0 +1,4 @@
+# Binary Files
+/Binaries
+# Un-ignore .dll files specifically for our project plugins (Windows)
+!Plugins/**/Binaries/Win64/*.dll

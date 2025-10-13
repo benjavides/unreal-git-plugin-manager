@@ -378,19 +378,38 @@ func (m *Manager) BuildForEngine(enginePath, worktreePath string) error {
 	_ = os.RemoveAll(buildOut) // clean previous packaged output
 
 	// Build: call UAT directly with proper working directory
-	cmd := exec.Command(uat, "BuildPlugin",
-		fmt.Sprintf("-Plugin=%s", uplugin),
-		fmt.Sprintf("-Package=%s", buildOut),
-		"-Rocket",
-		"-TargetPlatforms=Win64")
-
-	// Set working directory to the engine directory for proper UAT execution
-	cmd.Dir = enginePath
+	// On Windows, use cmd /c to properly handle paths with spaces
+	var cmd *exec.Cmd
+	if strings.Contains(uat, " ") {
+		// Path contains spaces, use cmd /c with proper argument handling
+		// First change to the engine directory, then execute the batch file
+		cmd = exec.Command("cmd", "/c",
+			"cd", "/d", enginePath, "&&",
+			uat, "BuildPlugin",
+			fmt.Sprintf("-Plugin=%s", uplugin),
+			fmt.Sprintf("-Package=%s", buildOut),
+			"-Rocket",
+			"-TargetPlatforms=Win64")
+	} else {
+		// Path has no spaces, can execute directly
+		cmd = exec.Command(uat, "BuildPlugin",
+			fmt.Sprintf("-Plugin=%s", uplugin),
+			fmt.Sprintf("-Package=%s", buildOut),
+			"-Rocket",
+			"-TargetPlatforms=Win64")
+		// Set working directory to the engine directory for proper UAT execution
+		cmd.Dir = enginePath
+	}
 
 	// Debug: print the command being executed
-	fmt.Printf("Executing: \"%s\" BuildPlugin -Plugin=\"%s\" -Package=\"%s\" -Rocket -TargetPlatforms=Win64\n",
-		uat, uplugin, buildOut)
-	fmt.Printf("Working directory: %s\n", enginePath)
+	if strings.Contains(uat, " ") {
+		fmt.Printf("Executing: cmd /c cd /d \"%s\" && \"%s\" BuildPlugin -Plugin=\"%s\" -Package=\"%s\" -Rocket -TargetPlatforms=Win64\n",
+			enginePath, uat, uplugin, buildOut)
+	} else {
+		fmt.Printf("Executing: \"%s\" BuildPlugin -Plugin=\"%s\" -Package=\"%s\" -Rocket -TargetPlatforms=Win64\n",
+			uat, uplugin, buildOut)
+		fmt.Printf("Working directory: %s\n", enginePath)
+	}
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

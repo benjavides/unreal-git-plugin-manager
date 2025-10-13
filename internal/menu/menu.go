@@ -11,6 +11,7 @@ import (
 	"ue-git-plugin-manager/internal/engine"
 	"ue-git-plugin-manager/internal/git"
 	"ue-git-plugin-manager/internal/plugin"
+	"ue-git-plugin-manager/internal/projectconfig"
 	"ue-git-plugin-manager/internal/utils"
 
 	"github.com/fatih/color"
@@ -64,6 +65,13 @@ func Run(app Application) error {
 				utils.Pause()
 			}
 			app.GetUtils().ClearScreen()
+		case "Configure project":
+			app.GetUtils().ClearScreen()
+			if err := runProjectConfigurator(app); err != nil {
+				fmt.Printf("Error configuring project: %v\n", err)
+				utils.Pause()
+			}
+			app.GetUtils().ClearScreen()
 		case "Settings":
 			app.GetUtils().ClearScreen()
 			if err := runSettings(app, config); err != nil {
@@ -95,6 +103,7 @@ func showMainMenu(app Application, config *config.Config) (string, error) {
 	items := []string{
 		"What is this?",
 		"Edit Setup",
+		"Configure project",
 		"Settings",
 		"Quit",
 	}
@@ -250,7 +259,7 @@ func runUpdate(app Application, config *config.Config) error {
 		}
 		fmt.Printf("✅ Done\n")
 
-		// Rebuild binaries for this engine
+		// Ensure stock plugin is disabled before rebuild
 		// Find engine path for this version
 		var enginePath string
 		for _, e := range config.Engines {
@@ -259,6 +268,14 @@ func runUpdate(app Application, config *config.Config) error {
 				break
 			}
 		}
+		if app.GetEngine().CheckPluginCollision(enginePath) {
+			if err := app.GetEngine().DisableStockPlugin(enginePath); err != nil {
+				fmt.Printf("❌ %v\n", err)
+				continue
+			}
+		}
+
+		// Rebuild binaries for this engine
 		wt := app.GetGit().GetWorktreePath(update.EngineVersion)
 		fmt.Printf("Compiling plugin for UE %s... ", update.EngineVersion)
 		if err := app.GetPlugin().BuildForEngine(enginePath, wt); err != nil {
@@ -773,14 +790,16 @@ func runSetupForEngine(app Application, config *config.Config, enginePath, engin
 		return fmt.Errorf("failed to create junction: %v", err)
 	}
 
+	// Always disable stock plugin before building to avoid name collision
+	if app.GetEngine().CheckPluginCollision(enginePath) {
+		if err := app.GetEngine().DisableStockPlugin(enginePath); err != nil {
+			return fmt.Errorf("failed to disable stock plugin: %v", err)
+		}
+	}
+
 	// Build plugin
 	if err := app.GetPlugin().BuildForEngine(enginePath, worktreePath); err != nil {
 		return fmt.Errorf("failed to build plugin: %v", err)
-	}
-
-	// Disable stock plugin
-	if err := app.GetEngine().DisableStockPlugin(enginePath); err != nil {
-		return fmt.Errorf("failed to disable stock plugin: %v", err)
 	}
 
 	fmt.Printf("✅ UE %s setup complete!\n", engineVersion)
@@ -815,6 +834,13 @@ func runUpdateForEngine(app Application, config *config.Config, enginePath, engi
 	fmt.Println("Updating worktree...")
 	if err := app.GetGit().UpdateWorktree(engineVersion, config.DefaultRemoteBranch); err != nil {
 		return fmt.Errorf("failed to update worktree: %v", err)
+	}
+
+	// Ensure stock plugin is disabled before rebuilding
+	if app.GetEngine().CheckPluginCollision(enginePath) {
+		if err := app.GetEngine().DisableStockPlugin(enginePath); err != nil {
+			return fmt.Errorf("failed to disable stock plugin: %v", err)
+		}
 	}
 
 	// Rebuild plugin
@@ -855,6 +881,13 @@ func runRepairForEngine(app Application, config *config.Config, enginePath, engi
 		}
 	}
 
+	// Ensure stock plugin is disabled before any rebuild
+	if app.GetEngine().CheckPluginCollision(enginePath) {
+		if err := app.GetEngine().DisableStockPlugin(enginePath); err != nil {
+			return fmt.Errorf("failed to disable stock plugin: %v", err)
+		}
+	}
+
 	// Rebuild plugin if binaries missing
 	if !status.BinariesExist {
 		worktreePath := app.GetGit().GetWorktreePath(engineVersion)
@@ -862,13 +895,7 @@ func runRepairForEngine(app Application, config *config.Config, enginePath, engi
 			return fmt.Errorf("failed to build plugin: %v", err)
 		}
 	}
-
-	// Disable stock plugin if still enabled
-	if status.StockPluginStatus == "enabled" {
-		if err := app.GetEngine().DisableStockPlugin(enginePath); err != nil {
-			return fmt.Errorf("failed to disable stock plugin: %v", err)
-		}
-	}
+	// Stock plugin already ensured disabled above
 
 	fmt.Printf("✅ UE %s repaired successfully!\n", engineVersion)
 	utils.Pause()
@@ -1364,6 +1391,15 @@ func rebuildPluginForEngine(app Application, config *config.Config) {
 	fmt.Printf("  Engine path: %s\n", selectedEngine.EnginePath)
 	fmt.Printf("  Worktree path: %s\n", worktreePath)
 
+	// Ensure stock plugin is disabled before manual rebuild
+	if app.GetEngine().CheckPluginCollision(selectedEngine.EnginePath) {
+		if err := app.GetEngine().DisableStockPlugin(selectedEngine.EnginePath); err != nil {
+			fmt.Printf("❌ Failed to disable stock plugin: %v\n", err)
+			utils.Pause()
+			return
+		}
+	}
+
 	if err := app.GetPlugin().BuildForEngine(selectedEngine.EnginePath, worktreePath); err != nil {
 		fmt.Printf("❌ Failed to rebuild plugin: %v\n", err)
 	} else {
@@ -1371,4 +1407,9 @@ func rebuildPluginForEngine(app Application, config *config.Config) {
 	}
 
 	utils.Pause()
+}
+
+// runProjectConfigurator starts the Configure project wizard
+func runProjectConfigurator(app Application) error {
+	return projectconfig.RunWizard()
 }
