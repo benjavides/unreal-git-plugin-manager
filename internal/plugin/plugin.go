@@ -130,24 +130,34 @@ func (m *Manager) CreateJunction(enginePath, worktreePath string) error {
 		return fmt.Errorf("failed to create junction: %v, output: %s, error: %s", err, outputStr, errorStr)
 	}
 
-	// Verify the junction was actually created
-	// Check for both junction and symbolic link success messages
-	successMessages := []string{
-		"Junction created for",
-		"symbolic link created for",
-		"created for",
+	// Locale-agnostic verification: inspect filesystem instead of parsing localized output
+	// 1) Path must now exist
+	fi, lerr := os.Lstat(pluginLinkPath)
+	if lerr != nil {
+		return fmt.Errorf("link not created at %s: %v", pluginLinkPath, lerr)
 	}
 
-	success := false
-	for _, msg := range successMessages {
-		if strings.Contains(outputStr, msg) {
-			success = true
-			break
+	// 2) If it's a symlink, ensure it points to the expected worktree
+	if fi.Mode()&os.ModeSymlink != 0 {
+		target, rerr := os.Readlink(pluginLinkPath)
+		if rerr != nil {
+			return fmt.Errorf("could not read symlink target: %v", rerr)
 		}
+		expectedAbs, _ := filepath.Abs(worktreePath)
+		targetAbs, _ := filepath.Abs(target)
+		if expectedAbs != targetAbs {
+			return fmt.Errorf("symlink target mismatch: got %s, want %s", targetAbs, expectedAbs)
+		}
+		return nil
 	}
 
-	if !success {
-		return fmt.Errorf("junction creation may have failed - unexpected output: %s", outputStr)
+	// 3) Otherwise verify it's a junction/reparse point and points to the worktree
+	if !m.JunctionExists(pluginLinkPath) {
+		return fmt.Errorf("created path is not a junction or symlink: %s", pluginLinkPath)
+	}
+
+	if !m.VerifyJunction(enginePath, worktreePath) {
+		return fmt.Errorf("junction does not point to expected target: %s", worktreePath)
 	}
 
 	return nil
