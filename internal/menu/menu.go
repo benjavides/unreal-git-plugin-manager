@@ -1,6 +1,7 @@
 package menu
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1050,8 +1051,12 @@ func changeScanRoots(app Application, config *config.Config) {
 
 	if utils.Confirm("Would you like to add a new scan root?") {
 		fmt.Print("Enter path to scan: ")
-		var newRoot string
-		fmt.Scanln(&newRoot)
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		newRoot := strings.TrimSpace(scanner.Text())
+
+		// Handle quoted paths by removing quotes if present
+		newRoot = strings.Trim(newRoot, "\"")
 
 		if newRoot != "" {
 			config.CustomEngineRoots = append(config.CustomEngineRoots, newRoot)
@@ -1070,8 +1075,9 @@ func changeBranch(app Application, config *config.Config) {
 
 	fmt.Printf("Current branch: %s\n", config.DefaultRemoteBranch)
 	fmt.Print("Enter new branch name: ")
-	var newBranch string
-	fmt.Scanln(&newBranch)
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	newBranch := strings.TrimSpace(scanner.Text())
 
 	if newBranch != "" {
 		config.DefaultRemoteBranch = newBranch
