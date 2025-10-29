@@ -382,7 +382,7 @@ func runAdvancedMenu(app Application, config *config.Config) error {
 			runDetailedSetupStatus(app, config)
 		case "Change scan roots":
 			app.GetUtils().ClearScreen()
-			changeScanRoots(app, config)
+			runManageCustomEnginePaths(app, config)
 			app.GetUtils().ClearScreen()
 		case "Change branch to track":
 			app.GetUtils().ClearScreen()
@@ -724,7 +724,7 @@ func runEngineEditOptions(app Application, config *config.Config, status detecti
 // runSettings shows the settings menu
 func runSettings(app Application, config *config.Config) error {
 	items := []string{
-		"Add Engine Path",
+		"Manage Custom Engine Paths",
 		"Change Branch to Track",
 		"Open Plugin Repository",
 		"Open Data Directory",
@@ -748,8 +748,8 @@ func runSettings(app Application, config *config.Config) error {
 	}
 
 	switch choice {
-	case "Add Engine Path":
-		changeScanRoots(app, config)
+	case "Manage Custom Engine Paths":
+		runManageCustomEnginePaths(app, config)
 		return nil
 	case "Change Branch to Track":
 		changeBranch(app, config)
@@ -766,6 +766,150 @@ func runSettings(app Application, config *config.Config) error {
 	}
 
 	return nil
+}
+
+// runManageCustomEnginePaths shows options to manage custom engine paths
+func runManageCustomEnginePaths(app Application, config *config.Config) error {
+	for {
+		choice, err := showManageCustomEnginePathsMenu(app, config)
+		if err != nil {
+			if err == promptui.ErrInterrupt {
+				return nil
+			}
+			return err
+		}
+
+		switch choice {
+		case "Add Custom Engine Path":
+			addCustomEnginePath(app, config)
+		case "Delete Custom Engine Path":
+			deleteCustomEnginePath(app, config)
+		case "Back":
+			return nil
+		}
+	}
+}
+
+// showManageCustomEnginePathsMenu displays the manage custom engine paths menu
+func showManageCustomEnginePathsMenu(app Application, config *config.Config) (string, error) {
+	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🔍 Manage Custom Engine Paths"))
+	fmt.Println()
+
+	// Show current custom engine paths
+	if len(config.CustomEngineRoots) == 0 {
+		fmt.Println("No custom engine paths configured.")
+	} else {
+		fmt.Println("Current custom engine paths:")
+		for i, root := range config.CustomEngineRoots {
+			fmt.Printf("  %d. %s\n", i+1, root)
+		}
+	}
+	fmt.Println()
+
+	items := []string{
+		"Add Custom Engine Path",
+		"Delete Custom Engine Path",
+		"Back",
+	}
+
+	prompt := promptui.Select{
+		Label:    "Select an option",
+		Items:    items,
+		Size:     10,
+		HideHelp: true,
+		Stdout:   &utils.BellSkipper{},
+	}
+
+	_, result, err := prompt.Run()
+	return result, err
+}
+
+// addCustomEnginePath allows the user to add a new custom engine path
+func addCustomEnginePath(app Application, config *config.Config) {
+	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("➕ Add Custom Engine Path"))
+	fmt.Println()
+
+	fmt.Print("Enter path to scan: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	newRoot := strings.TrimSpace(scanner.Text())
+
+	// Handle quoted paths by removing quotes if present
+	newRoot = strings.Trim(newRoot, "\"")
+
+	if newRoot != "" {
+		// Check if path already exists
+		for _, existingRoot := range config.CustomEngineRoots {
+			if existingRoot == newRoot {
+				fmt.Printf("⚠️  Path '%s' is already configured.\n", newRoot)
+				utils.Pause()
+				return
+			}
+		}
+
+		config.CustomEngineRoots = append(config.CustomEngineRoots, newRoot)
+		if err := app.GetConfig().Save(config); err != nil {
+			fmt.Printf("❌ Failed to save configuration: %v\n", err)
+		} else {
+			fmt.Printf("✅ Custom engine path added: %s\n", newRoot)
+		}
+	} else {
+		fmt.Println("❌ Empty path not allowed.")
+	}
+
+	utils.Pause()
+}
+
+// deleteCustomEnginePath allows the user to delete an existing custom engine path
+func deleteCustomEnginePath(app Application, config *config.Config) {
+	fmt.Println(color.New(color.FgRed, color.Bold).Sprint("🗑️  Delete Custom Engine Path"))
+	fmt.Println()
+
+	if len(config.CustomEngineRoots) == 0 {
+		fmt.Println("No custom engine paths to delete.")
+		utils.Pause()
+		return
+	}
+
+	fmt.Println("Select a custom engine path to delete:")
+	fmt.Println()
+
+	// Show current paths with numbers
+	for i, root := range config.CustomEngineRoots {
+		fmt.Printf("  %d. %s\n", i+1, root)
+	}
+	fmt.Println()
+
+	fmt.Print("Enter path number to delete (or 0 to cancel): ")
+	var choice int
+	fmt.Scanln(&choice)
+
+	if choice == 0 {
+		return
+	}
+
+	if choice < 1 || choice > len(config.CustomEngineRoots) {
+		fmt.Println("❌ Invalid selection.")
+		utils.Pause()
+		return
+	}
+
+	// Confirm deletion
+	pathToDelete := config.CustomEngineRoots[choice-1]
+	if !utils.Confirm(fmt.Sprintf("Are you sure you want to delete '%s'?", pathToDelete)) {
+		return
+	}
+
+	// Remove the path from the slice
+	config.CustomEngineRoots = append(config.CustomEngineRoots[:choice-1], config.CustomEngineRoots[choice:]...)
+
+	if err := app.GetConfig().Save(config); err != nil {
+		fmt.Printf("❌ Failed to save configuration: %v\n", err)
+	} else {
+		fmt.Printf("✅ Custom engine path deleted: %s\n", pathToDelete)
+	}
+
+	utils.Pause()
 }
 
 // runSetupForEngine sets up a specific engine
@@ -1036,33 +1180,6 @@ func showConfiguration(config *config.Config) {
 		fmt.Printf("     Branch: %s\n", eng.Branch)
 		fmt.Printf("     Stock Plugin Disabled: %t\n", eng.StockPluginDisabledByTool)
 		fmt.Println()
-	}
-
-	utils.Pause()
-}
-
-// changeScanRoots allows the user to modify custom engine scan roots
-func changeScanRoots(app Application, config *config.Config) {
-	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🔍 Custom Engine Scan Roots"))
-	fmt.Println()
-
-	fmt.Printf("Current custom roots: %v\n", config.CustomEngineRoots)
-	fmt.Println()
-
-	if utils.Confirm("Would you like to add a new scan root?") {
-		fmt.Print("Enter path to scan: ")
-		scanner := bufio.NewScanner(os.Stdin)
-		scanner.Scan()
-		newRoot := strings.TrimSpace(scanner.Text())
-
-		// Handle quoted paths by removing quotes if present
-		newRoot = strings.Trim(newRoot, "\"")
-
-		if newRoot != "" {
-			config.CustomEngineRoots = append(config.CustomEngineRoots, newRoot)
-			app.GetConfig().Save(config)
-			fmt.Println("✅ Scan root added!")
-		}
 	}
 
 	utils.Pause()
