@@ -1,0 +1,122 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Fetch full history for version bumping
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Get current version
+      id: get_version
+      run: |
+        $currentVersion = Get-Content VERSION -Raw
+        $currentVersion = $currentVersion.Trim()
+        Write-Host "Current version: $currentVersion"
+        echo "current_version=$currentVersion" >> $env:GITHUB_OUTPUT
+        
+        # Parse version components
+        $versionParts = $currentVersion -split '\.'
+        $major = [int]$versionParts[0]
+        $minor = [int]$versionParts[1]
+        $patch = [int]$versionParts[2]
+        
+        # Increment patch version
+        $patch++
+        $newVersion = "$major.$minor.$patch"
+        Write-Host "New version: $newVersion"
+        echo "new_version=$newVersion" >> $env:GITHUB_OUTPUT
+    
+    - name: Update version file
+      run: |
+        echo "${{ steps.get_version.outputs.new_version }}" > VERSION
+        Write-Host "Updated VERSION file to: ${{ steps.get_version.outputs.new_version }}"
+    
+    - name: Create logs directory
+      run: |
+        if (-not (Test-Path "logs")) {
+          New-Item -ItemType Directory -Path "logs"
+        }
+    
+    - name: Download dependencies
+      run: |
+        go mod tidy
+    
+    - name: Create dist directory
+      run: |
+        if (-not (Test-Path "dist")) {
+          New-Item -ItemType Directory -Path "dist"
+        }
+    
+    - name: Build executable
+      run: |
+        Write-Host "Building UE-Git-Plugin-Manager.exe..."
+        go build -o dist/UE-Git-Plugin-Manager.exe .
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Build failed!"
+          exit 1
+        }
+        Write-Host "Build successful!"
+    
+    - name: Verify executable
+      run: |
+        if (Test-Path "dist/UE-Git-Plugin-Manager.exe") {
+          $fileSize = (Get-Item "dist/UE-Git-Plugin-Manager.exe").Length
+          Write-Host "Executable created successfully. Size: $fileSize bytes"
+        } else {
+          Write-Error "Executable not found!"
+          exit 1
+        }
+    
+    - name: Commit version update
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add VERSION
+        git commit -m "Bump version to ${{ steps.get_version.outputs.new_version }} [skip ci]" || exit 0
+        git push origin main || exit 0
+    
+    - name: Create Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.get_version.outputs.new_version }}
+        release_name: Release v${{ steps.get_version.outputs.new_version }}
+        body: |
+          ## Changes in v${{ steps.get_version.outputs.new_version }}
+          
+          This release includes the latest changes from the main branch.
+          
+          ### Download
+          Download the `UE-Git-Plugin-Manager.exe` file below and run it to use the latest version.
+          
+          ### Installation
+          1. Download `UE-Git-Plugin-Manager.exe`
+          2. Run the executable
+          3. Follow the setup wizard
+        draft: false
+        prerelease: false
+    
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./dist/UE-Git-Plugin-Manager.exe
+        asset_name: UE-Git-Plugin-Manager.exe
+        asset_content_type: application/octet-stream
