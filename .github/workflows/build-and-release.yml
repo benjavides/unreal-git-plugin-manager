@@ -70,33 +70,20 @@ jobs:
         Write-Host "Version is controlled by the VERSION file in the repository"
     
     - name: Create Release
-      uses: actions/create-release@v1
+      run: |
+        gh release create "v${{ steps.get_version.outputs.version }}" `
+          --title "Release v${{ steps.get_version.outputs.version }}" `
+          --notes "## Changes in v${{ steps.get_version.outputs.version }}
+        
+        This release includes the latest changes from the main branch.
+        
+        ### Download
+        Download the \`UE-Git-Plugin-Manager.exe\` file below and run it to use the latest version.
+        
+        ### Installation
+        1. Download \`UE-Git-Plugin-Manager.exe\`
+        2. Run the executable
+        3. Follow the setup wizard" `
+          ./dist/UE-Git-Plugin-Manager.exe
       env:
         GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-      with:
-        tag_name: v${{ steps.get_version.outputs.version }}
-        release_name: Release v${{ steps.get_version.outputs.version }}
-        body: |
-          ## Changes in v${{ steps.get_version.outputs.version }}
-          
-          This release includes the latest changes from the main branch.
-          
-          ### Download
-          Download the `UE-Git-Plugin-Manager.exe` file below and run it to use the latest version.
-          
-          ### Installation
-          1. Download `UE-Git-Plugin-Manager.exe`
-          2. Run the executable
-          3. Follow the setup wizard
-        draft: false
-        prerelease: false
-    
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/UE-Git-Plugin-Manager.exe
-        asset_name: UE-Git-Plugin-Manager.exe
-        asset_content_type: application/octet-stream
