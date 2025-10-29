@@ -20,30 +20,13 @@ jobs:
       with:
         go-version: '1.21'
     
-    - name: Get current version
+    - name: Get version from VERSION file
       id: get_version
       run: |
-        $currentVersion = Get-Content VERSION -Raw
-        $currentVersion = $currentVersion.Trim()
-        Write-Host "Current version: $currentVersion"
-        echo "current_version=$currentVersion" >> $env:GITHUB_OUTPUT
-        
-        # Parse version components
-        $versionParts = $currentVersion -split '\.'
-        $major = [int]$versionParts[0]
-        $minor = [int]$versionParts[1]
-        $patch = [int]$versionParts[2]
-        
-        # Increment patch version
-        $patch++
-        $newVersion = "$major.$minor.$patch"
-        Write-Host "New version: $newVersion"
-        echo "new_version=$newVersion" >> $env:GITHUB_OUTPUT
-    
-    - name: Update version file
-      run: |
-        echo "${{ steps.get_version.outputs.new_version }}" > VERSION
-        Write-Host "Updated VERSION file to: ${{ steps.get_version.outputs.new_version }}"
+        $version = Get-Content VERSION -Raw
+        $version = $version.Trim()
+        Write-Host "Building release for version: $version"
+        echo "version=$version" >> $env:GITHUB_OUTPUT
     
     - name: Create logs directory
       run: |
@@ -81,23 +64,20 @@ jobs:
           exit 1
         }
     
-    - name: Commit version update
+    - name: Log version info
       run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add VERSION
-        git commit -m "Bump version to ${{ steps.get_version.outputs.new_version }} [skip ci]" || exit 0
-        git push origin main || exit 0
+        Write-Host "Building release for version: ${{ steps.get_version.outputs.version }}"
+        Write-Host "Version is controlled by the VERSION file in the repository"
     
     - name: Create Release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: v${{ steps.get_version.outputs.new_version }}
-        release_name: Release v${{ steps.get_version.outputs.new_version }}
+        tag_name: v${{ steps.get_version.outputs.version }}
+        release_name: Release v${{ steps.get_version.outputs.version }}
         body: |
-          ## Changes in v${{ steps.get_version.outputs.new_version }}
+          ## Changes in v${{ steps.get_version.outputs.version }}
           
           This release includes the latest changes from the main branch.
           
