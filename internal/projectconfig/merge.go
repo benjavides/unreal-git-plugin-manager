@@ -27,6 +27,12 @@ func DetectProjectRoot(path string) (string, error) {
 	if _, err := os.Stat(filepath.Join(path, "Content")); err == nil {
 		return path, nil
 	}
+
+	// Allow initializing before the Unreal project exists if this is a Git repo
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+		fmt.Println("Warning: No .uproject or Content/ folder found. Proceeding because a .git folder was detected.")
+		return path, nil
+	}
 	return "", errors.New("not an Unreal project folder (no .uproject or Content/)")
 }
 
