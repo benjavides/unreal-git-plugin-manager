@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -49,6 +50,11 @@ func RunWizard() error {
 		return err
 	}
 
+	// Git HTTP version configuration (required for Azure LFS)
+	if err := configureGitHttpVersion(root); err != nil {
+		return err
+	}
+
 	// INI settings
 	answers, err := promptIniAnswers()
 	if err != nil {
@@ -87,4 +93,25 @@ func promptIncludeBinaries() (bool, error) {
 		return false, err
 	}
 	return strings.HasPrefix(choice, "Include"), nil
+}
+
+// configureGitHttpVersion sets git http.version to HTTP/1.1 (required for Azure LFS)
+func configureGitHttpVersion(root string) error {
+	// Check if this is a git repository
+	gitDir := filepath.Join(root, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		// Not a git repository, skip this step
+		return nil
+	}
+
+	// Run git config --local http.version HTTP/1.1
+	cmd := exec.Command("git", "config", "--local", "http.version", "HTTP/1.1")
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to configure git http.version: %v\nOutput: %s", err, string(output))
+	}
+
+	fmt.Println("✅ Configured git http.version to HTTP/1.1 (required for Azure LFS)")
+	return nil
 }
