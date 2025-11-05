@@ -84,18 +84,18 @@ jobs:
         $exeName = "${{ steps.build_executable.outputs.exe_name }}"
         $exePath = "${{ steps.build_executable.outputs.exe_path }}"
         $notes = @"
-## Changes in v$version
-
-This release includes the latest changes from the main branch.
-
-### Download
-Download the ``$exeName`` file below and run it to use the latest version.
-
-### Installation
-1. Download ``$exeName``
-2. Run the executable
-3. Follow the setup wizard
-"@
+        ## Changes in v$version
+        
+        This release includes the latest changes from the main branch.
+        
+        ### Download
+        Download the ``$exeName`` file below and run it to use the latest version.
+        
+        ### Installation
+        1. Download ``$exeName``
+        2. Run the executable
+        3. Follow the setup wizard
+        "@
         gh release create "v$version" --title "Release v$version" --notes $notes $exePath
       env:
         GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
