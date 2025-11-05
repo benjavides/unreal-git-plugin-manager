@@ -39,7 +39,20 @@ func (m *Manager) DiscoverEngines(customRoots []string) ([]EngineInfo, error) {
 	// Custom engine roots
 	for _, root := range customRoots {
 		if _, err := os.Stat(root); err == nil {
-			engines = append(engines, m.scanDirectory(root)...)
+			// Check if the root path is itself a valid engine directory
+			// A valid engine has Engine\Binaries\Win64\UnrealEditor.exe
+			if m.validateEngine(root) {
+				// This is a specific engine path, add it directly
+				version := m.extractVersion(root)
+				engines = append(engines, EngineInfo{
+					Path:    root,
+					Version: version,
+					Valid:   true,
+				})
+			} else {
+				// This is a parent directory, scan it recursively for engines
+				engines = append(engines, m.scanDirectory(root)...)
+			}
 		}
 	}
 

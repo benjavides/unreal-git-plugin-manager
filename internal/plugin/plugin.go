@@ -33,46 +33,132 @@ func (m *Manager) CreateJunction(enginePath, worktreePath string) error {
 		return fmt.Errorf("insufficient permissions to create junction in %s - please run as administrator", filepath.Join(enginePath, "Engine", "Plugins"))
 	}
 
-	// Check what's actually at the path using dir command (more reliable for junctions)
+	// Check for existing junction using language-independent methods
 	fmt.Printf("  Checking for existing junction at: %s\n", pluginLinkPath)
 
-	// Use dir command to check if the junction exists (more reliable than os.Stat for broken junctions)
-	pluginsDir := filepath.Join(enginePath, "Engine", "Plugins")
-	dirCmd := exec.Command("cmd", "/c", "dir", pluginsDir)
-	dirOutput, dirErr := dirCmd.Output()
-
+	// First check if the symlink itself exists using Lstat (doesn't follow symlinks)
+	// This is critical - Stat() follows symlinks, so if target doesn't exist, it returns "does not exist"
+	// Lstat() checks if the symlink itself exists, regardless of target
+	var lstatInfo os.FileInfo
+	var lstatErr error
+	var readlinkTarget string
+	pathExists := false
 	junctionExists := false
-	if dirErr == nil {
-		dirStr := string(dirOutput)
-		fmt.Printf("  📁 Dir output analysis:\n")
-		fmt.Printf("    Contains <JUNCTION>: %t\n", strings.Contains(dirStr, "<JUNCTION>"))
-		fmt.Printf("    Contains UEGitPlugin_PB: %t\n", strings.Contains(dirStr, "UEGitPlugin_PB"))
 
-		// Look for the specific junction in the dir output
-		if strings.Contains(dirStr, "<JUNCTION>") && strings.Contains(dirStr, "UEGitPlugin_PB") {
+	if lstatInfo, lstatErr = os.Lstat(pluginLinkPath); lstatErr == nil {
+		pathExists = true
+		fmt.Printf("  📁 Path exists (via Lstat): isDir=%t\n", lstatInfo.IsDir())
+
+		// Try to read it as a link (works even if target doesn't exist)
+		if target, readErr := os.Readlink(pluginLinkPath); readErr == nil && target != "" {
+			readlinkTarget = target
+			fmt.Printf("  🔗 Path is readable as link, target: %s\n", target)
 			junctionExists = true
-			fmt.Printf("  📁 Junction found in dir output: UEGitPlugin_PB\n")
+		}
+	} else {
+		fmt.Printf("  📁 Path does not exist (via Lstat): %v\n", lstatErr)
+	}
+
+	// If Lstat didn't find it, try JunctionExists (which also uses Lstat now)
+	if !junctionExists {
+		junctionExists = m.JunctionExists(pluginLinkPath)
+		if junctionExists {
+			fmt.Printf("  ✅ Junction detected via JunctionExists()\n")
+			// Try to get the target
+			if target, readErr := os.Readlink(pluginLinkPath); readErr == nil && target != "" {
+				readlinkTarget = target
+			}
+		}
+	}
+
+	// If junction exists, check if it points to the correct location
+	if junctionExists && readlinkTarget != "" {
+		expectedAbs, _ := filepath.Abs(worktreePath)
+		targetAbs, _ := filepath.Abs(readlinkTarget)
+		if expectedAbs != targetAbs {
+			fmt.Printf("  ⚠️  Junction exists but points to wrong location (%s, expected %s)\n", readlinkTarget, worktreePath)
+			fmt.Printf("  Removing old junction to recreate with correct target...\n")
+			// Try multiple removal methods
+			removed := false
+			// First try Go's os.Remove (works well for symlinks)
+			if err := os.Remove(pluginLinkPath); err == nil {
+				fmt.Printf("  ✅ Junction removed using os.Remove()\n")
+				removed = true
+			} else {
+				fmt.Printf("  ⚠️  os.Remove() failed: %v, trying RemoveJunction()...\n", err)
+				// If that fails, try RemoveJunction
+				if err := m.RemoveJunction(pluginLinkPath); err == nil {
+					fmt.Printf("  ✅ Junction removed using RemoveJunction()\n")
+					removed = true
+				} else {
+					fmt.Printf("  ⚠️  RemoveJunction() failed: %v, trying ForceRemovePath()...\n", err)
+					// If that fails, try force removal
+					if err := m.ForceRemovePath(pluginLinkPath); err == nil {
+						fmt.Printf("  ✅ Junction removed using ForceRemovePath()\n")
+						removed = true
+					} else {
+						fmt.Printf("  ⚠️  ForceRemovePath() failed: %v\n", err)
+					}
+				}
+			}
+
+			// Verify it's gone
+			if _, statErr := os.Lstat(pluginLinkPath); statErr == nil {
+				return fmt.Errorf("old junction still exists after removal attempts: %s", pluginLinkPath)
+			}
+
+			if removed {
+				fmt.Printf("  ✅ Old junction removed successfully\n")
+			} else {
+				return fmt.Errorf("failed to remove old junction pointing to wrong location: all removal methods failed")
+			}
+
+			junctionExists = false
+			pathExists = false
 		} else {
-			fmt.Printf("  📁 No junction found in dir output\n")
+			fmt.Printf("  ✅ Junction exists and points to correct location\n")
+			// Junction is valid, no need to recreate
+			return nil
 		}
-	} else {
-		fmt.Printf("  ❌ Dir command failed: %v\n", dirErr)
 	}
 
-	// Also try our detection methods
-	if fileInfo, err := os.Stat(pluginLinkPath); err == nil {
-		fmt.Printf("  📁 Path exists via os.Stat: isDir=%t, mode=%s\n", fileInfo.IsDir(), fileInfo.Mode())
-	} else {
-		fmt.Printf("  📁 Path does not exist via os.Stat: %v\n", err)
-	}
-
-	// Use the more reliable detection method
-	if junctionExists || m.JunctionExists(pluginLinkPath) {
-		fmt.Printf("  ✅ Existing junction found, removing...\n")
-		if err := m.RemoveJunction(pluginLinkPath); err != nil {
-			return fmt.Errorf("failed to remove existing junction: %v", err)
+	// If junction exists or path exists, try to remove it
+	if junctionExists || pathExists {
+		fmt.Printf("  ✅ Existing junction or path found, removing...\n")
+		removed := false
+		// First try Go's os.Remove (works well for symlinks)
+		if err := os.Remove(pluginLinkPath); err == nil {
+			fmt.Printf("  ✅ Junction removed using os.Remove()\n")
+			removed = true
+		} else {
+			osRemoveErr := err
+			fmt.Printf("  ⚠️  os.Remove() failed: %v, trying RemoveJunction()...\n", osRemoveErr)
+			// If that fails, try RemoveJunction
+			if err := m.RemoveJunction(pluginLinkPath); err == nil {
+				fmt.Printf("  ✅ Junction removed using RemoveJunction()\n")
+				removed = true
+			} else {
+				removeJunctionErr := err
+				fmt.Printf("  ⚠️  RemoveJunction() failed: %v, trying ForceRemovePath()...\n", removeJunctionErr)
+				// If that fails, try force removal
+				if err := m.ForceRemovePath(pluginLinkPath); err == nil {
+					fmt.Printf("  ✅ Junction removed using ForceRemovePath()\n")
+					removed = true
+				} else {
+					forceRemoveErr := err
+					return fmt.Errorf("failed to remove existing junction: all removal methods failed (os.Remove: %v, RemoveJunction: %v, ForceRemovePath: %v)", osRemoveErr, removeJunctionErr, forceRemoveErr)
+				}
+			}
 		}
-		fmt.Printf("  ✅ Existing junction removed\n")
+
+		// Verify it's gone
+		if _, statErr := os.Lstat(pluginLinkPath); statErr == nil {
+			return fmt.Errorf("junction still exists after removal attempts: %s", pluginLinkPath)
+		}
+
+		if removed {
+			fmt.Printf("  ✅ Existing junction removed successfully\n")
+		}
 	} else {
 		fmt.Printf("  ✅ No existing junction found\n")
 	}
@@ -94,8 +180,16 @@ func (m *Manager) CreateJunction(enginePath, worktreePath string) error {
 	}
 
 	// Double-check the path right before creating the junction
+	// If it still exists, try force removal one more time
 	if _, err := os.Stat(pluginLinkPath); err == nil {
-		return fmt.Errorf("path still exists after removal attempts: %s", pluginLinkPath)
+		fmt.Printf("  ⚠️  Path still exists, attempting force removal...\n")
+		if removeErr := m.ForceRemovePath(pluginLinkPath); removeErr != nil {
+			return fmt.Errorf("path still exists after removal attempts: %s (force removal failed: %v)", pluginLinkPath, removeErr)
+		}
+		// Verify it's actually gone
+		if _, err := os.Stat(pluginLinkPath); err == nil {
+			return fmt.Errorf("path still exists after force removal: %s", pluginLinkPath)
+		}
 	}
 
 	// Create the junction using mklink
@@ -110,24 +204,143 @@ func (m *Manager) CreateJunction(enginePath, worktreePath string) error {
 	err := mklinkCmd.Run()
 	outputStr := stdout.String()
 	errorStr := stderr.String()
+	needsRetry := false
 
-	// Check if the command actually succeeded by looking at the output
-	// mklink returns exit code 0 and shows "Junction created for..." when successful
+	// Check if the command actually succeeded
+	// If mklink failed, check if the path now exists (it might have succeeded despite error)
 	if err != nil {
-		// Combine stdout and stderr for error analysis
-		combinedOutput := outputStr + errorStr
+		// First check if the path exists (might be "already exists" error)
+		if _, statErr := os.Stat(pluginLinkPath); statErr == nil {
+			// Path exists - check if it's a valid junction/symlink
+			fmt.Printf("  ⚠️  mklink failed but path exists, checking if it's a valid junction...\n")
 
-		// Provide more specific error messages
-		if strings.Contains(combinedOutput, "Access is denied") || strings.Contains(combinedOutput, "access denied") {
-			return fmt.Errorf("access denied - please run as administrator to create junctions in %s", enginePath)
+			// Try multiple methods to detect junction
+			isJunction := m.JunctionExists(pluginLinkPath)
+			isSymlink := false
+			canReadlink := false
+			var readlinkTarget string
+
+			if fi, lstatErr := os.Lstat(pluginLinkPath); lstatErr == nil {
+				isSymlink = fi.Mode()&os.ModeSymlink != 0
+			}
+
+			// Try os.Readlink as fallback (works even if other detection fails)
+			if target, readErr := os.Readlink(pluginLinkPath); readErr == nil && target != "" {
+				canReadlink = true
+				readlinkTarget = target
+				// If we can read it as a link, it's definitely a junction/symlink
+				if !isJunction && !isSymlink {
+					fmt.Printf("  🔗 Path is readable as link (target: %s), treating as junction\n", target)
+					isJunction = true
+				}
+			}
+
+			if isJunction || isSymlink || canReadlink {
+				// It's a valid junction/symlink - verify it points to the right place
+				var target string
+				var targetErr error
+				if canReadlink {
+					target = readlinkTarget
+				} else {
+					target, targetErr = m.GetJunctionTarget(pluginLinkPath)
+				}
+
+				if targetErr == nil {
+					expectedAbs, _ := filepath.Abs(worktreePath)
+					targetAbs, _ := filepath.Abs(target)
+					if expectedAbs == targetAbs {
+						// Junction exists and points to the right place - this is success!
+						fmt.Printf("  ✅ Junction already exists and points to correct target (despite mklink error)\n")
+						// Continue to verification below (which will pass)
+					} else {
+						// Junction exists but points to wrong place - need to recreate
+						fmt.Printf("  ⚠️  Junction exists but points to wrong target (%s, expected %s), removing...\n", target, worktreePath)
+						if removeErr := m.ForceRemovePath(pluginLinkPath); removeErr != nil {
+							return fmt.Errorf("junction exists at %s but points to wrong target and could not be removed: %v", pluginLinkPath, removeErr)
+						}
+						// Retry creation below
+						needsRetry = true
+					}
+				} else {
+					// Can't read target, but it's a junction - assume it's valid
+					fmt.Printf("  ✅ Junction exists (could not read target, but appears valid)\n")
+					// Continue to verification below
+				}
+			} else {
+				// Path exists but is not a junction - this is the "already exists" case
+				// Try to remove it and retry creation once
+				fmt.Printf("  ⚠️  Path exists but is not a junction, attempting removal...\n")
+				if removeErr := m.ForceRemovePath(pluginLinkPath); removeErr != nil {
+					return fmt.Errorf("path exists at %s but is not a junction and could not be removed: %v", pluginLinkPath, removeErr)
+				}
+				// Verify it's gone
+				if _, statErr := os.Stat(pluginLinkPath); statErr == nil {
+					return fmt.Errorf("path still exists after force removal: %s", pluginLinkPath)
+				}
+				// Retry creation once
+				needsRetry = true
+			}
+		} else {
+			// Path doesn't exist, mklink actually failed
+			// Check if the path exists now (might have been created despite error)
+			if _, statErr := os.Stat(pluginLinkPath); statErr == nil {
+				// Path exists but mklink reported error - this is unusual
+				// Try to verify if it's a valid junction
+				if m.JunctionExists(pluginLinkPath) {
+					fmt.Printf("  ✅ Junction was created despite error message\n")
+					// Continue to verification below
+				} else {
+					return fmt.Errorf("path was created but is not a valid junction: %s", pluginLinkPath)
+				}
+			} else {
+				// Path truly doesn't exist, mklink failed
+				// Check error code for common issues
+				if exitError, ok := err.(*exec.ExitError); ok {
+					exitCode := exitError.ExitCode()
+					// Exit code 1 can mean different things - don't assume it's access denied
+					if exitCode == 1 {
+						// Check if worktree path exists
+						if _, statErr := os.Stat(worktreePath); statErr != nil {
+							return fmt.Errorf("target path not found: %s", worktreePath)
+						}
+						// Check if we have write access (might be permission issue)
+						if !m.CheckWriteAccess(filepath.Join(enginePath, "Engine", "Plugins")) {
+							return fmt.Errorf("access denied - please run as administrator to create junctions in %s (exit code: %d)", enginePath, exitCode)
+						}
+						// Could be other issues - provide more context
+						return fmt.Errorf("failed to create junction (exit code: %d). Output: %s, Error: %s. Check if path exists or if there are permission issues.", exitCode, outputStr, errorStr)
+					}
+				}
+				return fmt.Errorf("failed to create junction: %v, output: %s, error: %s", err, outputStr, errorStr)
+			}
 		}
-		if strings.Contains(combinedOutput, "The system cannot find the path specified") {
-			return fmt.Errorf("target path not found: %s", worktreePath)
+	}
+
+	// If we need to retry creation (path was removed)
+	if needsRetry {
+		fmt.Printf("  Retrying junction creation...\n")
+		mklinkCmd = exec.Command("cmd", "/c", "mklink", "/D", pluginLinkPath, worktreePath)
+		mklinkCmd.Stdout = &stdout
+		mklinkCmd.Stderr = &stderr
+		stdout.Reset()
+		stderr.Reset()
+		err = mklinkCmd.Run()
+		outputStr = stdout.String()
+		errorStr = stderr.String()
+
+		if err != nil {
+			// Check if it was created despite error
+			if _, statErr := os.Stat(pluginLinkPath); statErr == nil {
+				if m.JunctionExists(pluginLinkPath) {
+					fmt.Printf("  ✅ Junction created successfully on retry (despite error message)\n")
+					// Continue to verification below
+				} else {
+					return fmt.Errorf("path was created but is not a valid junction: %s", pluginLinkPath)
+				}
+			} else {
+				return fmt.Errorf("failed to create junction on retry: %v, output: %s, error: %s", err, outputStr, errorStr)
+			}
 		}
-		if strings.Contains(combinedOutput, "Cannot create a file when that file already exists") {
-			return fmt.Errorf("junction already exists at %s - this should have been removed first", pluginLinkPath)
-		}
-		return fmt.Errorf("failed to create junction: %v, output: %s, error: %s", err, outputStr, errorStr)
 	}
 
 	// Locale-agnostic verification: inspect filesystem instead of parsing localized output
@@ -163,28 +376,47 @@ func (m *Manager) CreateJunction(enginePath, worktreePath string) error {
 	return nil
 }
 
-// JunctionExists checks if a junction exists at the given path
+// JunctionExists checks if a junction or symlink exists at the given path
+// This function accepts both junctions and directory symlinks (created with mklink /D)
 func (m *Manager) JunctionExists(path string) bool {
-	// First check if the path exists at all
-	fileInfo, err := os.Stat(path)
+	// First check if the path exists at all using Lstat (doesn't follow symlinks)
+	// This is critical - Stat() follows symlinks, so if target doesn't exist, it returns "does not exist"
+	// Lstat() checks if the symlink itself exists, regardless of target
+	fileInfo, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return false
 	}
 
+	// Check if it's a symlink first (works for both file and directory symlinks)
+	if fileInfo.Mode()&os.ModeSymlink != 0 {
+		// It's a symlink - try to read it to confirm
+		if target, err := os.Readlink(path); err == nil && target != "" {
+			return true
+		}
+	}
+
 	// If it exists, check if it's a directory (junctions appear as directories)
-	if !fileInfo.IsDir() {
-		return false
+	// But also check if it can be read as a link (might be a directory symlink)
+	if fileInfo.IsDir() {
+		// Try os.Readlink first (works for both symlinks and junctions in Go)
+		// This is the most reliable method and works across locales
+		if target, err := os.Readlink(path); err == nil && target != "" {
+			return true
+		}
+
+		// Try the simple method (fsutil) - works better with broken junctions
+		isJunction := m.IsJunctionSimple(path)
+
+		// If simple method fails, try the Windows API method
+		if !isJunction {
+			isJunction = m.IsJunction(path)
+		}
+
+		return isJunction
 	}
 
-	// Try the simple method first (works better with broken junctions)
-	isJunction := m.IsJunctionSimple(path)
-
-	// If simple method fails, try the Windows API method
-	if !isJunction {
-		isJunction = m.IsJunction(path)
-	}
-
-	return isJunction
+	// If it's not a directory and not a symlink, it's not a junction/symlink
+	return false
 }
 
 // IsJunction checks if a path is a junction (reparse point)

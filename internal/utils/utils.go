@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"unicode"
 
 	"github.com/fatih/color"
 )
@@ -165,4 +166,16 @@ func ClearScreen() {
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Run()
+}
+
+// HasNonASCIICharacters checks if a path contains any non-ASCII characters
+// This is important because Unreal Build Tool and MSVC compiler fail when
+// intermediate or source paths contain non-ASCII characters
+func HasNonASCIICharacters(path string) bool {
+	for _, r := range path {
+		if r > 127 || !unicode.IsPrint(r) {
+			return true
+		}
+	}
+	return false
 }

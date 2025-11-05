@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 echo Building UE Git Plugin Manager...
 
 REM Check if Go is installed
@@ -34,33 +35,45 @@ go mod tidy
 REM Create dist directory if it doesn't exist
 if not exist "dist" mkdir dist
 
-REM Check if UE-Git-Plugin-Manager.exe is running and stop it
-tasklist /FI "IMAGENAME eq UE-Git-Plugin-Manager.exe" 2>NUL | find /I /N "UE-Git-Plugin-Manager.exe">NUL
+REM Read version from VERSION file
+set VERSION=1.0.0
+if exist "VERSION" (
+    for /f "usebackq tokens=*" %%v in ("VERSION") do set VERSION=%%v
+    set VERSION=!VERSION: =!
+)
+echo Building version: !VERSION!
+
+REM Build executable name with version
+set EXE_NAME=UE-Git-Plugin-Manager-v!VERSION!.exe
+set EXE_PATH=dist\!EXE_NAME!
+
+REM Check if the versioned executable is running and stop it
+tasklist /FI "IMAGENAME eq !EXE_NAME!" 2>NUL | find /I /N "!EXE_NAME!">NUL
 if "%ERRORLEVEL%"=="0" (
-    echo UE-Git-Plugin-Manager.exe is currently running. Stopping it...
-    taskkill /F /IM UE-Git-Plugin-Manager.exe >NUL 2>&1
+    echo !EXE_NAME! is currently running. Stopping it...
+    taskkill /F /IM !EXE_NAME! >NUL 2>&1
     timeout /t 2 >NUL
 )
 
 REM Remove any existing executable and temporary files
-if exist "dist\UE-Git-Plugin-Manager.exe" del /F /Q "dist\UE-Git-Plugin-Manager.exe" >NUL 2>&1
-if exist "dist\UE-Git-Plugin-Manager.exe~" del /F /Q "dist\UE-Git-Plugin-Manager.exe~" >NUL 2>&1
+if exist "!EXE_PATH!" del /F /Q "!EXE_PATH!" >NUL 2>&1
+if exist "!EXE_PATH!~" del /F /Q "!EXE_PATH!~" >NUL 2>&1
 
 REM Build the executable
 echo Building executable...
-go build -o dist/UE-Git-Plugin-Manager.exe .
+go build -o "!EXE_PATH!" .
 
 if %ERRORLEVEL% EQU 0 (
     echo.
     echo Build successful!
-    echo UE-Git-Plugin-Manager.exe created in dist/ folder.
+    echo !EXE_NAME! created in dist/ folder.
     echo.
-    echo You can now run the application by double-clicking dist/UE-Git-Plugin-Manager.exe
+    echo You can now run the application by double-clicking dist\!EXE_NAME!
     
     REM Clean up any temporary files that might have been created
-    if exist "dist\UE-Git-Plugin-Manager.exe~" (
+    if exist "!EXE_PATH!~" (
         echo Cleaning up temporary files...
-        del /F /Q "dist\UE-Git-Plugin-Manager.exe~" >NUL 2>&1
+        del /F /Q "!EXE_PATH!~" >NUL 2>&1
     )
 ) else (
     echo.

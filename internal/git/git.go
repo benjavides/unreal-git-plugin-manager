@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"ue-git-plugin-manager/internal/config"
 )
 
 // UpdateInfo represents information about available updates
@@ -76,15 +78,32 @@ func (m *Manager) CloneOrigin() error {
 }
 
 // IsOriginCloned checks if the origin repository is cloned
+// Checks both the default and fallback base directories
 func (m *Manager) IsOriginCloned() bool {
+	// First check the configured baseDir
 	gitDir := filepath.Join(m.originDir, ".git")
-	_, err := os.Stat(gitDir)
-	return err == nil
+	if _, err := os.Stat(gitDir); err == nil {
+		return true
+	}
+
+	// Check both possible base directories
+	possibleBaseDirs := config.GetPossibleBaseDirs()
+	for _, baseDir := range possibleBaseDirs {
+		originDir := filepath.Join(baseDir, "repo-origin")
+		gitDir := filepath.Join(originDir, ".git")
+		if _, err := os.Stat(gitDir); err == nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 // GetDefaultBranch gets the default branch from the origin repository
+// Checks both the default and fallback base directories
 func (m *Manager) GetDefaultBranch() (string, error) {
-	cmd := exec.Command("git", "-C", m.originDir, "remote", "show", "origin")
+	originDir := m.getActualOriginDir()
+	cmd := exec.Command("git", "-C", originDir, "remote", "show", "origin")
 	output, err := cmd.Output()
 	if err != nil {
 		return "dev", err // Fallback to dev
@@ -104,16 +123,40 @@ func (m *Manager) GetDefaultBranch() (string, error) {
 	return "dev", nil // Fallback to dev
 }
 
+// getActualOriginDir returns the actual origin directory path (checks both locations)
+func (m *Manager) getActualOriginDir() string {
+	// First check the configured originDir
+	gitDir := filepath.Join(m.originDir, ".git")
+	if _, err := os.Stat(gitDir); err == nil {
+		return m.originDir
+	}
+
+	// Check both possible base directories
+	possibleBaseDirs := config.GetPossibleBaseDirs()
+	for _, baseDir := range possibleBaseDirs {
+		originDir := filepath.Join(baseDir, "repo-origin")
+		gitDir := filepath.Join(originDir, ".git")
+		if _, err := os.Stat(gitDir); err == nil {
+			return originDir
+		}
+	}
+
+	// Return configured originDir if nothing found (for creation)
+	return m.originDir
+}
+
 // FetchAll fetches all remote changes
 func (m *Manager) FetchAll() error {
-	cmd := exec.Command("git", "-C", m.originDir, "fetch", "--all", "--prune")
+	originDir := m.getActualOriginDir()
+	cmd := exec.Command("git", "-C", originDir, "fetch", "--all", "--prune")
 	return cmd.Run()
 }
 
 // CreateEngineBranch creates a branch for a specific engine version
 func (m *Manager) CreateEngineBranch(version, defaultBranch string) error {
+	originDir := m.getActualOriginDir()
 	branchName := fmt.Sprintf("engine-%s", version)
-	cmd := exec.Command("git", "-C", m.originDir, "branch", "--force", branchName, fmt.Sprintf("origin/%s", defaultBranch))
+	cmd := exec.Command("git", "-C", originDir, "branch", "--force", branchName, fmt.Sprintf("origin/%s", defaultBranch))
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to create engine branch: %v, output: %s", err, string(output))
@@ -123,6 +166,7 @@ func (m *Manager) CreateEngineBranch(version, defaultBranch string) error {
 
 // CreateWorktree creates a worktree for an engine version
 func (m *Manager) CreateWorktree(version string) error {
+	originDir := m.getActualOriginDir()
 	worktreePath := filepath.Join(m.worktreesDir, fmt.Sprintf("UE_%s", version))
 
 	// Create the worktrees directory if it doesn't exist
@@ -131,8 +175,8 @@ func (m *Manager) CreateWorktree(version string) error {
 	}
 
 	// Check if origin directory exists
-	if _, err := os.Stat(m.originDir); os.IsNotExist(err) {
-		return fmt.Errorf("origin directory does not exist: %s", m.originDir)
+	if _, err := os.Stat(originDir); os.IsNotExist(err) {
+		return fmt.Errorf("origin directory does not exist: %s", originDir)
 	}
 
 	// Get the default branch (all worktrees use the same branch)
@@ -142,7 +186,7 @@ func (m *Manager) CreateWorktree(version string) error {
 	}
 
 	// Make sure we're on the default branch in the origin repository
-	checkoutDefaultCmd := exec.Command("git", "-C", m.originDir, "checkout", defaultBranch)
+	checkoutDefaultCmd := exec.Command("git", "-C", originDir, "checkout", defaultBranch)
 	if err := checkoutDefaultCmd.Run(); err != nil {
 		return fmt.Errorf("failed to checkout default branch: %v", err)
 	}
@@ -156,7 +200,7 @@ func (m *Manager) CreateWorktree(version string) error {
 
 	// Create the worktree from the default branch
 	// Use --detach to avoid conflicts with the main repository
-	cmd := exec.Command("git", "-C", m.originDir, "worktree", "add", "--detach", worktreePath, defaultBranch)
+	cmd := exec.Command("git", "-C", originDir, "worktree", "add", "--detach", worktreePath, defaultBranch)
 	output, err := cmd.Output()
 	if err != nil {
 		// Try to get stderr as well
@@ -175,14 +219,49 @@ func (m *Manager) CreateWorktree(version string) error {
 }
 
 // WorktreeExists checks if a worktree exists for the given version
+// Checks both the default and fallback base directories
 func (m *Manager) WorktreeExists(version string) bool {
+	// First check the configured baseDir
 	worktreePath := filepath.Join(m.worktreesDir, fmt.Sprintf("UE_%s", version))
-	_, err := os.Stat(worktreePath)
-	return err == nil
+	if _, err := os.Stat(worktreePath); err == nil {
+		return true
+	}
+
+	// Check both possible base directories
+	possibleBaseDirs := config.GetPossibleBaseDirs()
+	worktreeSubdir := fmt.Sprintf("UE_%s", version)
+	for _, baseDir := range possibleBaseDirs {
+		worktreesDir := filepath.Join(baseDir, "worktrees")
+		worktreePath := filepath.Join(worktreesDir, worktreeSubdir)
+		if _, err := os.Stat(worktreePath); err == nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 // GetWorktreePath returns the path to a worktree
+// Checks both the default and fallback base directories to find the actual location
 func (m *Manager) GetWorktreePath(version string) string {
+	// First check the configured baseDir
+	worktreePath := filepath.Join(m.worktreesDir, fmt.Sprintf("UE_%s", version))
+	if _, err := os.Stat(worktreePath); err == nil {
+		return worktreePath
+	}
+
+	// Check both possible base directories
+	possibleBaseDirs := config.GetPossibleBaseDirs()
+	worktreeSubdir := fmt.Sprintf("UE_%s", version)
+	for _, baseDir := range possibleBaseDirs {
+		worktreesDir := filepath.Join(baseDir, "worktrees")
+		worktreePath := filepath.Join(worktreesDir, worktreeSubdir)
+		if _, err := os.Stat(worktreePath); err == nil {
+			return worktreePath
+		}
+	}
+
+	// If not found, return the path based on configured baseDir (for creation)
 	return filepath.Join(m.worktreesDir, fmt.Sprintf("UE_%s", version))
 }
 
@@ -202,7 +281,8 @@ func (m *Manager) GetUpdateInfo(version, defaultBranch string) (*UpdateInfo, err
 	localSHA := strings.TrimSpace(string(localOutput))
 
 	// Get remote HEAD
-	remoteCmd := exec.Command("git", "-C", m.originDir, "rev-parse", fmt.Sprintf("origin/%s", defaultBranch))
+	originDir := m.getActualOriginDir()
+	remoteCmd := exec.Command("git", "-C", originDir, "rev-parse", fmt.Sprintf("origin/%s", defaultBranch))
 	remoteOutput, err := remoteCmd.Output()
 	if err != nil {
 		return nil, err
@@ -210,7 +290,7 @@ func (m *Manager) GetUpdateInfo(version, defaultBranch string) (*UpdateInfo, err
 	remoteSHA := strings.TrimSpace(string(remoteOutput))
 
 	// Get commits ahead
-	aheadCmd := exec.Command("git", "-C", m.originDir, "rev-list", "--count", fmt.Sprintf("%s..origin/%s", localSHA, defaultBranch))
+	aheadCmd := exec.Command("git", "-C", originDir, "rev-list", "--count", fmt.Sprintf("%s..origin/%s", localSHA, defaultBranch))
 	aheadOutput, err := aheadCmd.Output()
 	if err != nil {
 		return nil, err
@@ -246,17 +326,18 @@ func (m *Manager) UpdateWorktree(version, defaultBranch string) error {
 
 // RemoveWorktree removes a worktree
 func (m *Manager) RemoveWorktree(version string) error {
+	originDir := m.getActualOriginDir()
 	worktreePath := m.GetWorktreePath(version)
 	if !m.WorktreeExists(version) {
 		return nil // Already removed
 	}
 
 	// First, try to remove the worktree normally
-	cmd := exec.Command("git", "-C", m.originDir, "worktree", "remove", worktreePath)
+	cmd := exec.Command("git", "-C", originDir, "worktree", "remove", worktreePath)
 	if err := cmd.Run(); err != nil {
 		// If normal removal fails, try force removal
 		fmt.Printf("  Normal worktree removal failed, trying force removal...\n")
-		cmd = exec.Command("git", "-C", m.originDir, "worktree", "remove", "--force", worktreePath)
+		cmd = exec.Command("git", "-C", originDir, "worktree", "remove", "--force", worktreePath)
 		if err := cmd.Run(); err != nil {
 			// If Git worktree remove still fails, manually remove the directory
 			fmt.Printf("  Git worktree remove failed, manually removing directory...\n")

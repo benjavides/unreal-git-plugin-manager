@@ -45,22 +45,31 @@ jobs:
         }
     
     - name: Build executable
+      id: build_executable
       run: |
-        Write-Host "Building UE-Git-Plugin-Manager.exe..."
-        go build -o dist/UE-Git-Plugin-Manager.exe .
+        $version = ${{ steps.get_version.outputs.version }}
+        $exeName = "UE-Git-Plugin-Manager-v$version.exe"
+        $exePath = "dist/$exeName"
+        Write-Host "Building $exeName..."
+        go build -o $exePath .
         if ($LASTEXITCODE -ne 0) {
           Write-Error "Build failed!"
           exit 1
         }
         Write-Host "Build successful!"
+        echo "exe_name=$exeName" >> $env:GITHUB_OUTPUT
+        echo "exe_path=$exePath" >> $env:GITHUB_OUTPUT
     
     - name: Verify executable
       run: |
-        if (Test-Path "dist/UE-Git-Plugin-Manager.exe") {
-          $fileSize = (Get-Item "dist/UE-Git-Plugin-Manager.exe").Length
-          Write-Host "Executable created successfully. Size: $fileSize bytes"
+        $exeName = "${{ steps.build_executable.outputs.exe_name }}"
+        $exePath = "${{ steps.build_executable.outputs.exe_path }}"
+        if (Test-Path $exePath) {
+          $fileSize = (Get-Item $exePath).Length
+          Write-Host "Executable created successfully: $exeName"
+          Write-Host "Size: $fileSize bytes"
         } else {
-          Write-Error "Executable not found!"
+          Write-Error "Executable not found: $exePath"
           exit 1
         }
     
@@ -71,19 +80,22 @@ jobs:
     
     - name: Create Release
       run: |
-        gh release create "v${{ steps.get_version.outputs.version }}" `
-          --title "Release v${{ steps.get_version.outputs.version }}" `
-          --notes "## Changes in v${{ steps.get_version.outputs.version }}
-        
-        This release includes the latest changes from the main branch.
-        
-        ### Download
-        Download the \`UE-Git-Plugin-Manager.exe\` file below and run it to use the latest version.
-        
-        ### Installation
-        1. Download \`UE-Git-Plugin-Manager.exe\`
-        2. Run the executable
-        3. Follow the setup wizard" `
-          ./dist/UE-Git-Plugin-Manager.exe
+        $version = "${{ steps.get_version.outputs.version }}"
+        $exeName = "${{ steps.build_executable.outputs.exe_name }}"
+        $exePath = "${{ steps.build_executable.outputs.exe_path }}"
+        $notes = @"
+## Changes in v$version
+
+This release includes the latest changes from the main branch.
+
+### Download
+Download the ``$exeName`` file below and run it to use the latest version.
+
+### Installation
+1. Download ``$exeName``
+2. Run the executable
+3. Follow the setup wizard
+"@
+        gh release create "v$version" --title "Release v$version" --notes $notes $exePath
       env:
         GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}

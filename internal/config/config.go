@@ -2,10 +2,13 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"time"
+
+	"ue-git-plugin-manager/internal/utils"
 )
 
 // Config represents the application configuration
@@ -48,6 +51,8 @@ func New(exeDir string) *Manager {
 }
 
 // getUserConfigDir returns the user's config directory for the application
+// If the default path contains non-ASCII characters, uses a fallback location
+// to prevent UBT/MSVC build failures
 func getUserConfigDir() string {
 	// Get the current user
 	usr, err := user.Current()
@@ -60,12 +65,28 @@ func getUserConfigDir() string {
 	// Use the user's config directory
 	// On Windows: %APPDATA%\ue-git-plugin-manager
 	// On Linux/macOS: ~/.config/ue-git-plugin-manager
-	configDir := filepath.Join(usr.HomeDir, "AppData", "Roaming", "ue-git-plugin-manager")
+	defaultConfigDir := filepath.Join(usr.HomeDir, "AppData", "Roaming", "ue-git-plugin-manager")
+
+	// Check if the default path contains non-ASCII characters
+	// Unreal Build Tool and MSVC compiler fail when paths contain non-ASCII characters
+	if utils.HasNonASCIICharacters(defaultConfigDir) {
+		// Use fallback location: C:\ProgramData\ue-git-plugin-manager
+		// Use filepath.Join with "C:\\" to ensure absolute path on Windows
+		fallbackConfigDir := filepath.Join("C:\\", "ProgramData", "ue-git-plugin-manager")
+		fmt.Printf("⚠️  Warning: Username contains non-ASCII characters.\n")
+		fmt.Printf("   Default path: %s\n", defaultConfigDir)
+		fmt.Printf("   Using fallback path: %s\n", fallbackConfigDir)
+		fmt.Printf("   (This is required to prevent build failures with UBT/MSVC)\n\n")
+
+		// Create the directory if it doesn't exist
+		os.MkdirAll(fallbackConfigDir, 0755)
+		return fallbackConfigDir
+	}
 
 	// Create the directory if it doesn't exist
-	os.MkdirAll(configDir, 0755)
+	os.MkdirAll(defaultConfigDir, 0755)
 
-	return configDir
+	return defaultConfigDir
 }
 
 // GetExeDir returns the executable directory
@@ -76,6 +97,24 @@ func (m *Manager) GetExeDir() string {
 // GetBaseDir returns the base directory for the application data
 func (m *Manager) GetBaseDir() string {
 	return m.baseDir
+}
+
+// GetPossibleBaseDirs returns both the default and fallback base directories
+// This is used for detection code to check both locations
+func GetPossibleBaseDirs() []string {
+	usr, err := user.Current()
+	if err != nil {
+		return []string{}
+	}
+
+	// Default path: %APPDATA%\ue-git-plugin-manager
+	defaultPath := filepath.Join(usr.HomeDir, "AppData", "Roaming", "ue-git-plugin-manager")
+
+	// Fallback path: C:\ProgramData\ue-git-plugin-manager
+	// Use filepath.Join with "C:\\" to ensure absolute path on Windows
+	fallbackPath := filepath.Join("C:\\", "ProgramData", "ue-git-plugin-manager")
+
+	return []string{defaultPath, fallbackPath}
 }
 
 // Exists checks if the configuration file exists
