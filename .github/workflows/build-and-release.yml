@@ -93,48 +93,48 @@ jobs:
         }
         
         # Get commits since last tag (or all commits if no tag exists)
-        $commits = ""
+        $commitLines = @()
         if ($lastTag) {
           Write-Host "Collecting commits since tag: $lastTag"
-          $commits = git log --pretty=format:"- %s" --no-merges "$lastTag..HEAD" 2>$null
+          $commitLines = git log --pretty=format:"- %s" --no-merges "$lastTag..HEAD" 2>$null
         } else {
           Write-Host "No previous tag found, collecting all commits"
-          $commits = git log --pretty=format:"- %s" --no-merges
+          $commitLines = git log --pretty=format:"- %s" --no-merges
         }
         
         # Handle empty commit list
-        if ([string]::IsNullOrWhiteSpace($commits)) {
+        if ($null -eq $commitLines -or $commitLines.Count -eq 0 -or ($commitLines.Count -eq 1 -and [string]::IsNullOrWhiteSpace($commitLines[0]))) {
           $commits = "- No changes (only merge commits)"
           Write-Host "Warning: No non-merge commits found"
         } else {
-          Write-Host "Found commits for release notes"
+          # Join commit lines with newlines
+          $commits = $commitLines -join "`n"
+          Write-Host "Found $($commitLines.Count) commits for release notes"
         }
         
-        # Store in GitHub output (escape newlines and special characters)
-        $commitsEscaped = $commits -replace "`r?`n", "`n" -replace '"', '`"'
-        echo "commits<<EOF" >> $env:GITHUB_OUTPUT
-        echo "$commitsEscaped" >> $env:GITHUB_OUTPUT
-        echo "EOF" >> $env:GITHUB_OUTPUT
+        # Store in GitHub output using EOF delimiter to preserve newlines
+        "commits<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        $commits | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
     
     - name: Create Release
       run: |
         $version = "${{ steps.get_version.outputs.version }}"
         $exeName = "${{ steps.build_executable.outputs.exe_name }}"
         $exePath = "${{ steps.build_executable.outputs.exe_path }}"
-        $commits = "${{ steps.collect_commits.outputs.commits }}"
-        $notes = @"
-        ## Changes in v$version
+        # Retrieve commits - EOF delimiter preserves newlines
+        $commitsRaw = "${{ steps.collect_commits.outputs.commits }}"
         
-        $commits
+        # Build release notes - newlines are preserved by EOF delimiter
+        $notes = "## Changes in v$version`n`n"
+        $notes += $commitsRaw
+        $notes += "`n`n### Download`n"
+        $notes += "Download the ``$exeName`` file below and run it to use the latest version.`n`n"
+        $notes += "### Installation`n"
+        $notes += "1. Download ``$exeName```n"
+        $notes += "2. Run the executable`n"
+        $notes += "3. Follow the setup wizard"
         
-        ### Download
-        Download the ``$exeName`` file below and run it to use the latest version.
-        
-        ### Installation
-        1. Download ``$exeName``
-        2. Run the executable
-        3. Follow the setup wizard
-        "@
         gh release create "v$version" --title "Release v$version" --notes $notes $exePath
       env:
         GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
