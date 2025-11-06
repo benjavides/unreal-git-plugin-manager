@@ -78,15 +78,54 @@ jobs:
         Write-Host "Building release for version: ${{ steps.get_version.outputs.version }}"
         Write-Host "Version is controlled by the VERSION file in the repository"
     
+    - name: Collect commits for release notes
+      id: collect_commits
+      run: |
+        # Try to find the last release tag
+        $lastTag = $null
+        try {
+          $lastTag = git describe --tags --abbrev=0 --match "v*" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            $lastTag = $null
+          }
+        } catch {
+          $lastTag = $null
+        }
+        
+        # Get commits since last tag (or all commits if no tag exists)
+        $commits = ""
+        if ($lastTag) {
+          Write-Host "Collecting commits since tag: $lastTag"
+          $commits = git log --pretty=format:"- %s" --no-merges "$lastTag..HEAD" 2>$null
+        } else {
+          Write-Host "No previous tag found, collecting all commits"
+          $commits = git log --pretty=format:"- %s" --no-merges
+        }
+        
+        # Handle empty commit list
+        if ([string]::IsNullOrWhiteSpace($commits)) {
+          $commits = "- No changes (only merge commits)"
+          Write-Host "Warning: No non-merge commits found"
+        } else {
+          Write-Host "Found commits for release notes"
+        }
+        
+        # Store in GitHub output (escape newlines and special characters)
+        $commitsEscaped = $commits -replace "`r?`n", "`n" -replace '"', '`"'
+        echo "commits<<EOF" >> $env:GITHUB_OUTPUT
+        echo "$commitsEscaped" >> $env:GITHUB_OUTPUT
+        echo "EOF" >> $env:GITHUB_OUTPUT
+    
     - name: Create Release
       run: |
         $version = "${{ steps.get_version.outputs.version }}"
         $exeName = "${{ steps.build_executable.outputs.exe_name }}"
         $exePath = "${{ steps.build_executable.outputs.exe_path }}"
+        $commits = "${{ steps.collect_commits.outputs.commits }}"
         $notes = @"
         ## Changes in v$version
         
-        This release includes the latest changes from the main branch.
+        $commits
         
         ### Download
         Download the ``$exeName`` file below and run it to use the latest version.
