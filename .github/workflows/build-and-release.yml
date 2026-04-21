@@ -2,181 +2,83 @@ name: Build and Release
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch: # Allow manual triggering
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   build-and-release:
     runs-on: windows-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0 # Fetch full history for version bumping
-    
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.21'
-    
-    - name: Get version from VERSION file
-      id: get_version
-      run: |
-        $version = Get-Content VERSION -Raw
-        $version = $version.Trim()
-        Write-Host "Building release for version: $version"
-        echo "version=$version" >> $env:GITHUB_OUTPUT
-    
-    - name: Check if release already exists
-      id: check_release
-      run: |
-        $version = "${{ steps.get_version.outputs.version }}"
-        $tagName = "v$version"
-        
-        # Fetch tags from remote to ensure we have the latest
-        git fetch --tags --quiet 2>$null
-        
-        # Check if tag exists locally
-        $tagExists = $false
-        try {
-          $result = git rev-parse --verify "refs/tags/$tagName" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            $tagExists = $true
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith("v")) {
+            Write-Error "Expected a v* tag, got: $tag"
+            exit 1
           }
-        } catch {
-          $tagExists = $false
-        }
-        
-        # If not found locally, check remote
-        if (-not $tagExists) {
-          try {
-            $remoteResult = git ls-remote --tags origin "$tagName" 2>$null
-            if ($remoteResult -and $remoteResult.Length -gt 0 -and $remoteResult -match $tagName) {
-              $tagExists = $true
-            }
-          } catch {
-            $tagExists = $false
+
+          Write-Host "Building release for tag: $tag"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Download dependencies
+        run: go mod tidy
+
+      - name: Create dist directory
+        run: |
+          if (-not (Test-Path "dist")) {
+            New-Item -ItemType Directory -Path "dist"
           }
-        }
-        
-        if ($tagExists) {
-          Write-Host "Release tag $tagName already exists. Skipping release creation."
-          echo "should_create_release=false" >> $env:GITHUB_OUTPUT
-        } else {
-          Write-Host "Release tag $tagName does not exist. Will create new release."
-          echo "should_create_release=true" >> $env:GITHUB_OUTPUT
-        }
-    
-    - name: Create logs directory
-      run: |
-        if (-not (Test-Path "logs")) {
-          New-Item -ItemType Directory -Path "logs"
-        }
-    
-    - name: Download dependencies
-      run: |
-        go mod tidy
-    
-    - name: Create dist directory
-      run: |
-        if (-not (Test-Path "dist")) {
-          New-Item -ItemType Directory -Path "dist"
-        }
-    
-    - name: Build executable
-      id: build_executable
-      run: |
-        $version = ${{ steps.get_version.outputs.version }}
-        $exeName = "UE-Git-Plugin-Manager-v$version.exe"
-        $exePath = "dist/$exeName"
-        Write-Host "Building $exeName..."
-        go build -o $exePath .
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "Build failed!"
-          exit 1
-        }
-        Write-Host "Build successful!"
-        echo "exe_name=$exeName" >> $env:GITHUB_OUTPUT
-        echo "exe_path=$exePath" >> $env:GITHUB_OUTPUT
-    
-    - name: Verify executable
-      run: |
-        $exeName = "${{ steps.build_executable.outputs.exe_name }}"
-        $exePath = "${{ steps.build_executable.outputs.exe_path }}"
-        if (Test-Path $exePath) {
-          $fileSize = (Get-Item $exePath).Length
-          Write-Host "Executable created successfully: $exeName"
-          Write-Host "Size: $fileSize bytes"
-        } else {
-          Write-Error "Executable not found: $exePath"
-          exit 1
-        }
-    
-    - name: Log version info
-      run: |
-        Write-Host "Building release for version: ${{ steps.get_version.outputs.version }}"
-        Write-Host "Version is controlled by the VERSION file in the repository"
-    
-    - name: Collect commits for release notes
-      id: collect_commits
-      if: steps.check_release.outputs.should_create_release == 'true'
-      run: |
-        # Try to find the last release tag
-        $lastTag = $null
-        try {
-          $lastTag = git describe --tags --abbrev=0 --match "v*" 2>$null
+
+      - name: Build executable
+        id: build_executable
+        run: |
+          $tag = "${{ steps.tag.outputs.tag }}"
+          $exeName = "UE-Git-Plugin-Manager-$tag.exe"
+          $exePath = "dist/$exeName"
+
+          Write-Host "Building $exeName..."
+          go build -o $exePath .
+
           if ($LASTEXITCODE -ne 0) {
-            $lastTag = $null
+            Write-Error "Build failed"
+            exit 1
           }
-        } catch {
-          $lastTag = $null
-        }
-        
-        # Get commits since last tag (or all commits if no tag exists)
-        $commitLines = @()
-        if ($lastTag) {
-          Write-Host "Collecting commits since tag: $lastTag"
-          $commitLines = git log --pretty=format:"- %s" --no-merges "$lastTag..HEAD" 2>$null
-        } else {
-          Write-Host "No previous tag found, collecting all commits"
-          $commitLines = git log --pretty=format:"- %s" --no-merges
-        }
-        
-        # Handle empty commit list
-        if ($null -eq $commitLines -or $commitLines.Count -eq 0 -or ($commitLines.Count -eq 1 -and [string]::IsNullOrWhiteSpace($commitLines[0]))) {
-          $commits = "- No changes (only merge commits)"
-          Write-Host "Warning: No non-merge commits found"
-        } else {
-          # Join commit lines with newlines
-          $commits = $commitLines -join "`n"
-          Write-Host "Found $($commitLines.Count) commits for release notes"
-        }
-        
-        # Store in GitHub output using EOF delimiter to preserve newlines
-        "commits<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-        $commits | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-        "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-    
-    - name: Create Release
-      if: steps.check_release.outputs.should_create_release == 'true'
-      run: |
-        $version = "${{ steps.get_version.outputs.version }}"
-        $exeName = "${{ steps.build_executable.outputs.exe_name }}"
-        $exePath = "${{ steps.build_executable.outputs.exe_path }}"
-        # Retrieve commits - EOF delimiter preserves newlines
-        $commitsRaw = "${{ steps.collect_commits.outputs.commits }}"
-        
-        # Build release notes - newlines are preserved by EOF delimiter
-        $notes = "## Changes in v$version`n`n"
-        $notes += $commitsRaw
-        $notes += "`n`n### Download`n"
-        $notes += "Download the ``$exeName`` file below and run it to use the latest version.`n`n"
-        $notes += "### Installation`n"
-        $notes += "1. Download ``$exeName```n"
-        $notes += "2. Run the executable`n"
-        $notes += "3. Follow the setup wizard"
-        
-        gh release create "v$version" --title "Release v$version" --notes $notes $exePath
-      env:
-        GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+          "exe_name=$exeName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "exe_path=$exePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Verify executable
+        run: |
+          $exePath = "${{ steps.build_executable.outputs.exe_path }}"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Executable not found: $exePath"
+            exit 1
+          }
+
+          $fileSize = (Get-Item $exePath).Length
+          Write-Host "Executable created: $exePath"
+          Write-Host "Size: $fileSize bytes"
+
+      - name: Create GitHub release
+        run: |
+          $tag = "${{ steps.tag.outputs.tag }}"
+          $exePath = "${{ steps.build_executable.outputs.exe_path }}"
+
+          gh release create $tag $exePath --title "Release $tag" --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

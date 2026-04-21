@@ -73,7 +73,21 @@ func promptForPath() (string, error) {
 	fmt.Print("Enter or paste the project folder path: ")
 	reader := bufio.NewReader(os.Stdin)
 	p, _ := reader.ReadString('\n')
-	p = filepath.Clean(strings.TrimSpace(p))
+	p = strings.TrimSpace(p)
+	p = strings.Trim(p, "\"")
+	if p == "" {
+		exePath, err := os.Executable()
+		if err == nil {
+			p = filepath.Dir(exePath)
+		} else {
+			cwd, cwdErr := os.Getwd()
+			if cwdErr == nil {
+				p = cwd
+			}
+		}
+		fmt.Printf("No path entered, using executable folder: %s\n", p)
+	}
+	p = filepath.Clean(p)
 	if p == "." { // allow current dir quickly
 		cwd, _ := os.Getwd()
 		p = cwd

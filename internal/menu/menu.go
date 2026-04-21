@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"ue-git-plugin-manager/internal/config"
 	"ue-git-plugin-manager/internal/detection"
@@ -13,6 +15,7 @@ import (
 	"ue-git-plugin-manager/internal/git"
 	"ue-git-plugin-manager/internal/plugin"
 	"ue-git-plugin-manager/internal/projectconfig"
+	"ue-git-plugin-manager/internal/projectlocks"
 	"ue-git-plugin-manager/internal/utils"
 
 	"github.com/fatih/color"
@@ -68,7 +71,7 @@ func Run(app Application) error {
 			app.GetUtils().ClearScreen()
 		case "Configure project":
 			app.GetUtils().ClearScreen()
-			if err := runProjectConfigurator(app); err != nil {
+			if err := runProjectToolsMenu(app); err != nil {
 				fmt.Printf("Error configuring project: %v\n", err)
 				utils.Pause()
 			}
@@ -93,7 +96,7 @@ func showMainMenu(app Application, config *config.Config) (string, error) {
 	fmt.Println()
 
 	// Use detection system to show current status
-	summary, err := app.GetDetection().GetSimpleSetupSummary(config.CustomEngineRoots, config.DefaultRemoteBranch)
+	summary, err := app.GetDetection().GetSimpleSetupSummary(config.CustomEngineRoots, config.DefaultRemoteBranch, config.PinnedCommitSHA)
 	if err != nil {
 		fmt.Printf("Warning: Could not detect setup status: %v\n", err)
 		fmt.Println()
@@ -220,7 +223,7 @@ func runUpdate(app Application, config *config.Config) error {
 	// Check each managed engine for updates
 	var updatesAvailable []git.UpdateInfo
 	for _, eng := range config.Engines {
-		updateInfo, err := app.GetGit().GetUpdateInfo(eng.EngineVersion, config.DefaultRemoteBranch)
+		updateInfo, err := app.GetGit().GetUpdateInfo(eng.EngineVersion, config.DefaultRemoteBranch, config.PinnedCommitSHA)
 		if err != nil {
 			fmt.Printf("❌ Failed to check updates for UE %s: %v\n", eng.EngineVersion, err)
 			continue
@@ -254,7 +257,7 @@ func runUpdate(app Application, config *config.Config) error {
 	fmt.Println("🔄 Updating engines...")
 	for _, update := range updatesAvailable {
 		fmt.Printf("Updating UE %s... ", update.EngineVersion)
-		if err := app.GetGit().UpdateWorktree(update.EngineVersion, config.DefaultRemoteBranch); err != nil {
+		if err := app.GetGit().UpdateWorktree(update.EngineVersion, config.DefaultRemoteBranch, config.PinnedCommitSHA); err != nil {
 			fmt.Printf("❌ Failed: %v\n", err)
 			continue
 		}
@@ -925,7 +928,7 @@ func runSetupForEngine(app Application, config *config.Config, enginePath, engin
 	}
 
 	// Create worktree
-	if err := app.GetGit().CreateWorktree(engineVersion); err != nil {
+	if err := app.GetGit().CreateWorktree(engineVersion, config.DefaultRemoteBranch, config.PinnedCommitSHA); err != nil {
 		return fmt.Errorf("failed to create worktree: %v", err)
 	}
 
@@ -957,7 +960,7 @@ func runUpdateForEngine(app Application, config *config.Config, enginePath, engi
 	fmt.Printf("Checking for updates for UE %s...\n", engineVersion)
 
 	// Check if there are updates available
-	updateInfo, err := app.GetGit().GetUpdateInfo(engineVersion, config.DefaultRemoteBranch)
+	updateInfo, err := app.GetGit().GetUpdateInfo(engineVersion, config.DefaultRemoteBranch, config.PinnedCommitSHA)
 	if err != nil {
 		return fmt.Errorf("failed to check for updates: %v", err)
 	}
@@ -977,7 +980,7 @@ func runUpdateForEngine(app Application, config *config.Config, enginePath, engi
 
 	// Update worktree
 	fmt.Println("Updating worktree...")
-	if err := app.GetGit().UpdateWorktree(engineVersion, config.DefaultRemoteBranch); err != nil {
+	if err := app.GetGit().UpdateWorktree(engineVersion, config.DefaultRemoteBranch, config.PinnedCommitSHA); err != nil {
 		return fmt.Errorf("failed to update worktree: %v", err)
 	}
 
@@ -1009,7 +1012,7 @@ func runRepairForEngine(app Application, config *config.Config, enginePath, engi
 
 	// Recreate worktree if missing
 	if !status.WorktreeExists {
-		if err := app.GetGit().CreateWorktree(engineVersion); err != nil {
+		if err := app.GetGit().CreateWorktree(engineVersion, config.DefaultRemoteBranch, config.PinnedCommitSHA); err != nil {
 			return fmt.Errorf("failed to create worktree: %v", err)
 		}
 	}
@@ -1168,6 +1171,7 @@ func showConfiguration(config *config.Config) {
 	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("📋 Current Configuration"))
 	fmt.Println()
 	fmt.Printf("Default Remote Branch: %s\n", config.DefaultRemoteBranch)
+	fmt.Printf("Pinned Commit SHA: %s\n", config.PinnedCommitSHA)
 	fmt.Printf("Origin Directory: %s\n", config.OriginDir)
 	fmt.Printf("Worktrees Directory: %s\n", config.WorktreesDir)
 	fmt.Printf("Custom Engine Roots: %v\n", config.CustomEngineRoots)
@@ -1370,7 +1374,7 @@ func repairBrokenSetup(app Application, config *config.Config) {
 		// Check if worktree exists, if not create it
 		if !status.WorktreeExists {
 			fmt.Printf("  Creating worktree... ")
-			if err := app.GetGit().CreateWorktree(status.EngineVersion); err != nil {
+			if err := app.GetGit().CreateWorktree(status.EngineVersion, config.DefaultRemoteBranch, config.PinnedCommitSHA); err != nil {
 				fmt.Printf("❌ Failed: %v\n", err)
 				continue
 			}
@@ -1530,6 +1534,211 @@ func rebuildPluginForEngine(app Application, config *config.Config) {
 	}
 
 	utils.Pause()
+}
+
+func runProjectToolsMenu(app Application) error {
+	for {
+		items := []string{
+			"Repair My Locks",
+			"Show Current Project Locks",
+			"Run Project Setup Wizard",
+			"Back",
+		}
+
+		prompt := promptui.Select{
+			Label:    "Project Tools",
+			Items:    items,
+			Size:     10,
+			HideHelp: true,
+			Stdout:   &utils.BellSkipper{},
+		}
+
+		_, choice, err := prompt.Run()
+		if err != nil {
+			if err == promptui.ErrInterrupt {
+				return nil
+			}
+			return err
+		}
+
+		switch choice {
+		case "Repair My Locks":
+			if err := runRepairMyLocks(app); err != nil {
+				return err
+			}
+		case "Show Current Project Locks":
+			if err := runShowCurrentProjectLocks(app); err != nil {
+				return err
+			}
+		case "Run Project Setup Wizard":
+			if err := runProjectConfigurator(app); err != nil {
+				return err
+			}
+		case "Back":
+			return nil
+		}
+
+		fmt.Println()
+	}
+}
+
+func promptForProjectRoot(app Application) (string, error) {
+	fmt.Print("Enter or paste the project folder path: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return "", fmt.Errorf("no input received")
+	}
+
+	input := strings.TrimSpace(scanner.Text())
+	input = strings.Trim(input, "\"")
+	if input == "" {
+		exeDir := app.GetConfig().GetExeDir()
+		if strings.TrimSpace(exeDir) == "" {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return "", err
+			}
+			exeDir = cwd
+		}
+		fmt.Printf("No path entered, using executable folder: %s\n", exeDir)
+		input = exeDir
+	}
+	if input == "." {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		input = cwd
+	}
+
+	cleanPath := filepath.Clean(input)
+	root, err := projectconfig.DetectProjectRoot(cleanPath)
+	if err != nil {
+		return "", err
+	}
+
+	return root, nil
+}
+
+func runShowCurrentProjectLocks(app Application) error {
+	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🔒 Current Project Locks"))
+	fmt.Println()
+
+	root, err := promptForProjectRoot(app)
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		utils.Pause()
+		return nil
+	}
+
+	locks, err := projectlocks.ListProjectLocks(root)
+	if err != nil {
+		fmt.Printf("❌ Failed to list project locks: %v\n", err)
+		utils.Pause()
+		return nil
+	}
+
+	if len(locks) == 0 {
+		fmt.Println("✅ No locks found in this project.")
+		utils.Pause()
+		return nil
+	}
+
+	sort.Slice(locks, func(i, j int) bool {
+		return strings.ToLower(locks[i].Path) < strings.ToLower(locks[j].Path)
+	})
+
+	fmt.Printf("Found %d lock(s):\n\n", len(locks))
+	for i, lock := range locks {
+		owner := lock.Owner
+		if strings.TrimSpace(owner) == "" {
+			owner = "Unknown"
+		}
+		fmt.Printf("%d. %s\n", i+1, lock.Path)
+		fmt.Printf("   Owner: %s\n", owner)
+		fmt.Printf("   Locked: %s\n", formatLockTimestamp(lock.LockedAt))
+		fmt.Println()
+	}
+
+	utils.Pause()
+	return nil
+}
+
+func runRepairMyLocks(app Application) error {
+	fmt.Println(color.New(color.FgCyan, color.Bold).Sprint("🛠️ Repair My Locks"))
+	fmt.Println()
+
+	root, err := promptForProjectRoot(app)
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		utils.Pause()
+		return nil
+	}
+
+	report, err := projectlocks.RepairMyLocks(root)
+	if err != nil {
+		fmt.Printf("❌ Failed to repair locks: %v\n", err)
+		utils.Pause()
+		return nil
+	}
+
+	fmt.Printf("Total locks found: %d\n", report.TotalLocks)
+	if report.TotalLocks == 0 {
+		fmt.Println("✅ Nothing to repair.")
+		utils.Pause()
+		return nil
+	}
+
+	fmt.Printf("Locks identified as yours: %d (%s)\n", report.CandidateLocks, report.OwnershipSource)
+	if strings.TrimSpace(report.Upstream) != "" {
+		fmt.Printf("Upstream branch: %s\n", report.Upstream)
+	}
+	fmt.Println()
+
+	if len(report.Unlocked) > 0 {
+		fmt.Printf("✅ Unlocked %d lock(s):\n", len(report.Unlocked))
+		for _, lock := range report.Unlocked {
+			fmt.Printf("  - %s\n", lock.Path)
+		}
+		fmt.Println()
+	}
+
+	if len(report.Skipped) > 0 {
+		fmt.Printf("⚠️ Skipped %d lock(s):\n", len(report.Skipped))
+		for _, item := range report.Skipped {
+			fmt.Printf("  - %s (%s)\n", item.Lock.Path, item.Reason)
+		}
+		fmt.Println()
+	}
+
+	if len(report.Failed) > 0 {
+		fmt.Printf("❌ Failed to unlock %d lock(s):\n", len(report.Failed))
+		for _, item := range report.Failed {
+			fmt.Printf("  - %s (%s)\n", item.Lock.Path, item.Reason)
+		}
+		fmt.Println()
+	}
+
+	if len(report.Unlocked) == 0 && len(report.Skipped) == 0 && len(report.Failed) == 0 {
+		fmt.Println("No lock actions were performed.")
+	}
+
+	utils.Pause()
+	return nil
+}
+
+func formatLockTimestamp(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "Unknown"
+	}
+
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
+	}
+
+	return parsed.Local().Format("2006-01-02 15:04:05")
 }
 
 // runProjectConfigurator starts the Configure project wizard

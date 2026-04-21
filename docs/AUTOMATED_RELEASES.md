@@ -1,66 +1,59 @@
 # Automated Releases
 
-This project uses GitHub Actions to automatically build and release new versions when changes are pushed to the main branch.
+This project uses GitHub Actions to build and release only when a version tag is pushed.
 
 ## How it works
 
-1. **Trigger**: Every push to the `main` branch triggers the build and release workflow
-2. **Version Control**: The version is controlled by the `VERSION` file in the repository
-3. **Building**: The application is built using the same process as `build.bat`
-4. **Release**: A new GitHub release is created with the built executable using the version from the VERSION file
+1. **Trigger**: Only pushes of tags that match `v*` trigger the workflow
+2. **Version Control**: The release version comes from the Git tag itself (for example `v1.0.8`)
+3. **Building**: The application is built with `go build` on Windows
+4. **Release**: A GitHub release is created for the pushed tag and the executable is uploaded as an asset
 
-## Version Management
+## Version Management (Manual Tags)
 
-- The version is stored in the `VERSION` file (e.g., `1.0.2`)
-- **Developer controls the version**: Update the VERSION file to the desired version before pushing
-- Version format follows semantic versioning: `MAJOR.MINOR.PATCH`
-- The workflow uses whatever version is specified in the VERSION file
+- The version is defined by your tag (for example `v1.0.8`)
+- **Developer controls releases manually** by creating and pushing tags
+- Recommended version format follows semantic versioning: `vMAJOR.MINOR.PATCH`
 
-### Version Update Process
+### Release Process
 
 **Before creating a release:**
-1. Update the `VERSION` file to the desired version (e.g., `1.0.2`)
-2. Commit and push your changes to the main branch
-3. The GitHub Action will automatically create a release with that version
+1. Commit and push your changes to `main`
+2. Create the release tag locally
+3. Push the tag
+4. The GitHub Action creates the release for that tag
 
 **Example workflow:**
 ```bash
-# Update VERSION file to 1.0.2
-echo "1.0.2" > VERSION
-
-# Commit and push
-git add VERSION
-git commit -m "Prepare release v1.0.2"
+# Commit and push your code changes
+git add .
+git commit -m "Prepare release v1.0.8"
 git push origin main
 
-# GitHub Action automatically creates release v1.0.2
+# Create and push release tag
+git tag v1.0.8
+git push origin v1.0.8
+
+# GitHub Action automatically creates release v1.0.8
 ```
-
-## Manual Release
-
-You can also trigger a release manually:
-1. Go to the "Actions" tab in GitHub
-2. Select "Build and Release" workflow
-3. Click "Run workflow" button
-4. Choose the branch (usually `main`) and click "Run workflow"
 
 ## Release Assets
 
 Each release includes:
-- `UE-Git-Plugin-Manager.exe` - The built executable ready to run
+- `UE-Git-Plugin-Manager-vX.Y.Z.exe` - The built executable ready to run
 
 ## Workflow Details
 
 The GitHub Action workflow (`/.github/workflows/build-and-release.yml`) performs these steps:
 
 1. **Setup**: Checkout code, setup Go 1.21
-2. **Version Reading**: Read version from VERSION file
+2. **Tag Reading**: Read the pushed tag from `github.ref_name`
 3. **Build Process**: 
-   - Create necessary directories (`logs`, `dist`)
+   - Create output directory (`dist`)
    - Download dependencies (`go mod tidy`)
-   - Build executable (`go build -o dist/UE-Git-Plugin-Manager.exe .`)
+   - Build executable (`go build -o dist/UE-Git-Plugin-Manager-vX.Y.Z.exe .`)
    - Verify the executable was created
-4. **Release Creation**: Create GitHub release with the version from VERSION file
+4. **Release Creation**: Create GitHub release for the pushed tag
 5. **Asset Upload**: Upload the built executable as a release asset
 
 ## Requirements
@@ -73,6 +66,6 @@ The GitHub Action workflow (`/.github/workflows/build-and-release.yml`) performs
 
 If the workflow fails:
 1. Check the Actions tab for error details
-2. Ensure the `VERSION` file exists and contains a valid version number
+2. Ensure the pushed tag matches `v*` and points to the expected commit
 3. Verify that the Go build process works locally with `build.bat`
 4. Check that all dependencies are properly specified in `go.mod`

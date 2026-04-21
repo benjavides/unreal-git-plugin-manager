@@ -6,9 +6,15 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"ue-git-plugin-manager/internal/utils"
+)
+
+const (
+	defaultRemoteBranch = "dev"
+	defaultPinnedCommit = "40d8a5438e654927934c14d6836a67363fbe0495"
 )
 
 // Config represents the application configuration
@@ -18,6 +24,7 @@ type Config struct {
 	OriginDir           string   `json:"origin_dir"`
 	WorktreesDir        string   `json:"worktrees_dir"`
 	DefaultRemoteBranch string   `json:"default_remote_branch"`
+	PinnedCommitSHA     string   `json:"pinned_commit_sha"`
 	Engines             []Engine `json:"engines"`
 	CustomEngineRoots   []string `json:"custom_engine_roots"`
 	LastRunUTC          string   `json:"last_run_utc"`
@@ -135,6 +142,13 @@ func (m *Manager) Load() (*Config, error) {
 		return nil, err
 	}
 
+	if strings.TrimSpace(config.DefaultRemoteBranch) == "" {
+		config.DefaultRemoteBranch = defaultRemoteBranch
+	}
+	if strings.TrimSpace(config.PinnedCommitSHA) == "" {
+		config.PinnedCommitSHA = defaultPinnedCommit
+	}
+
 	// Resolve relative paths
 	config.BaseDir = m.resolvePath(config.BaseDir)
 	config.OriginDir = m.resolvePath(config.OriginDir)
@@ -171,7 +185,8 @@ func (m *Manager) CreateDefault() *Config {
 		BaseDir:             m.baseDir,
 		OriginDir:           "repo-origin",
 		WorktreesDir:        "worktrees",
-		DefaultRemoteBranch: "dev",
+		DefaultRemoteBranch: defaultRemoteBranch,
+		PinnedCommitSHA:     defaultPinnedCommit,
 		Engines:             []Engine{},
 		CustomEngineRoots:   []string{},
 		LastRunUTC:          time.Now().UTC().Format(time.RFC3339),

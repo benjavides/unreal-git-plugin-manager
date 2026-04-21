@@ -152,6 +152,35 @@ func (m *Manager) FetchAll() error {
 	return cmd.Run()
 }
 
+func (m *Manager) normalizeBranch(defaultBranch string) string {
+	branch := strings.TrimSpace(defaultBranch)
+	if branch == "" {
+		branch = "dev"
+	}
+	return branch
+}
+
+func (m *Manager) resolveTargetSHA(defaultBranch, pinnedCommit string) (string, error) {
+	originDir := m.getActualOriginDir()
+	pin := strings.TrimSpace(pinnedCommit)
+	if pin != "" {
+		cmd := exec.Command("git", "-C", originDir, "rev-parse", "--verify", fmt.Sprintf("%s^{commit}", pin))
+		output, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve pinned commit %q: %w", pin, err)
+		}
+		return strings.TrimSpace(string(output)), nil
+	}
+
+	branch := m.normalizeBranch(defaultBranch)
+	cmd := exec.Command("git", "-C", originDir, "rev-parse", fmt.Sprintf("origin/%s", branch))
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve origin/%s: %w", branch, err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 // CreateEngineBranch creates a branch for a specific engine version
 func (m *Manager) CreateEngineBranch(version, defaultBranch string) error {
 	originDir := m.getActualOriginDir()
@@ -165,7 +194,7 @@ func (m *Manager) CreateEngineBranch(version, defaultBranch string) error {
 }
 
 // CreateWorktree creates a worktree for an engine version
-func (m *Manager) CreateWorktree(version string) error {
+func (m *Manager) CreateWorktree(version, defaultBranch, pinnedCommit string) error {
 	originDir := m.getActualOriginDir()
 	worktreePath := filepath.Join(m.worktreesDir, fmt.Sprintf("UE_%s", version))
 
@@ -179,16 +208,14 @@ func (m *Manager) CreateWorktree(version string) error {
 		return fmt.Errorf("origin directory does not exist: %s", originDir)
 	}
 
-	// Get the default branch (all worktrees use the same branch)
-	defaultBranch, err := m.GetDefaultBranch()
-	if err != nil {
-		defaultBranch = "dev"
-	}
-
-	// Make sure we're on the default branch in the origin repository
-	checkoutDefaultCmd := exec.Command("git", "-C", originDir, "checkout", defaultBranch)
-	if err := checkoutDefaultCmd.Run(); err != nil {
-		return fmt.Errorf("failed to checkout default branch: %v", err)
+	branch := m.normalizeBranch(defaultBranch)
+	targetRef := fmt.Sprintf("origin/%s", branch)
+	if strings.TrimSpace(pinnedCommit) != "" {
+		targetSHA, err := m.resolveTargetSHA(branch, pinnedCommit)
+		if err != nil {
+			return err
+		}
+		targetRef = targetSHA
 	}
 
 	// Check if worktree already exists and remove it
@@ -200,7 +227,7 @@ func (m *Manager) CreateWorktree(version string) error {
 
 	// Create the worktree from the default branch
 	// Use --detach to avoid conflicts with the main repository
-	cmd := exec.Command("git", "-C", originDir, "worktree", "add", "--detach", worktreePath, defaultBranch)
+	cmd := exec.Command("git", "-C", originDir, "worktree", "add", "--detach", worktreePath, targetRef)
 	output, err := cmd.Output()
 	if err != nil {
 		// Try to get stderr as well
@@ -266,11 +293,12 @@ func (m *Manager) GetWorktreePath(version string) string {
 }
 
 // GetUpdateInfo gets update information for a worktree
-func (m *Manager) GetUpdateInfo(version, defaultBranch string) (*UpdateInfo, error) {
+func (m *Manager) GetUpdateInfo(version, defaultBranch, pinnedCommit string) (*UpdateInfo, error) {
 	worktreePath := m.GetWorktreePath(version)
 	if !m.WorktreeExists(version) {
 		return nil, fmt.Errorf("worktree does not exist for version %s", version)
 	}
+	branch := m.normalizeBranch(defaultBranch)
 
 	// Get local HEAD
 	localCmd := exec.Command("git", "-C", worktreePath, "rev-parse", "HEAD")
@@ -280,47 +308,59 @@ func (m *Manager) GetUpdateInfo(version, defaultBranch string) (*UpdateInfo, err
 	}
 	localSHA := strings.TrimSpace(string(localOutput))
 
-	// Get remote HEAD
-	originDir := m.getActualOriginDir()
-	remoteCmd := exec.Command("git", "-C", originDir, "rev-parse", fmt.Sprintf("origin/%s", defaultBranch))
-	remoteOutput, err := remoteCmd.Output()
+	targetSHA, err := m.resolveTargetSHA(branch, pinnedCommit)
 	if err != nil {
 		return nil, err
 	}
-	remoteSHA := strings.TrimSpace(string(remoteOutput))
 
 	// Get commits ahead
-	aheadCmd := exec.Command("git", "-C", originDir, "rev-list", "--count", fmt.Sprintf("%s..origin/%s", localSHA, defaultBranch))
-	aheadOutput, err := aheadCmd.Output()
-	if err != nil {
-		return nil, err
-	}
 	commitsAhead := 0
-	fmt.Sscanf(strings.TrimSpace(string(aheadOutput)), "%d", &commitsAhead)
+	if strings.TrimSpace(pinnedCommit) != "" {
+		if localSHA != targetSHA {
+			commitsAhead = 1
+		}
+	} else {
+		originDir := m.getActualOriginDir()
+		aheadCmd := exec.Command("git", "-C", originDir, "rev-list", "--count", fmt.Sprintf("%s..origin/%s", localSHA, branch))
+		aheadOutput, err := aheadCmd.Output()
+		if err != nil {
+			return nil, err
+		}
+		fmt.Sscanf(strings.TrimSpace(string(aheadOutput)), "%d", &commitsAhead)
+	}
 
 	// Generate URLs
-	latestCommitURL := fmt.Sprintf("https://github.com/ProjectBorealis/UEGitPlugin/commit/%s", remoteSHA)
-	compareURL := fmt.Sprintf("https://github.com/ProjectBorealis/UEGitPlugin/compare/%s...%s", localSHA, remoteSHA)
+	latestCommitURL := fmt.Sprintf("https://github.com/ProjectBorealis/UEGitPlugin/commit/%s", targetSHA)
+	compareURL := fmt.Sprintf("https://github.com/ProjectBorealis/UEGitPlugin/compare/%s...%s", localSHA, targetSHA)
 
 	return &UpdateInfo{
 		EngineVersion:   version,
 		CommitsAhead:    commitsAhead,
 		LocalSHA:        localSHA,
-		RemoteSHA:       remoteSHA,
+		RemoteSHA:       targetSHA,
 		LatestCommitURL: latestCommitURL,
 		CompareURL:      compareURL,
 	}, nil
 }
 
 // UpdateWorktree updates a worktree to the latest version
-func (m *Manager) UpdateWorktree(version, defaultBranch string) error {
+func (m *Manager) UpdateWorktree(version, defaultBranch, pinnedCommit string) error {
 	worktreePath := m.GetWorktreePath(version)
 	if !m.WorktreeExists(version) {
 		return fmt.Errorf("worktree does not exist for version %s", version)
 	}
+	targetSHA, err := m.resolveTargetSHA(defaultBranch, pinnedCommit)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(pinnedCommit) != "" {
+		cmd := exec.Command("git", "-C", worktreePath, "checkout", "--detach", targetSHA)
+		return cmd.Run()
+	}
 
 	// Fast-forward merge
-	cmd := exec.Command("git", "-C", worktreePath, "merge", "--ff-only", fmt.Sprintf("origin/%s", defaultBranch))
+	cmd := exec.Command("git", "-C", worktreePath, "merge", "--ff-only", targetSHA)
 	return cmd.Run()
 }
 

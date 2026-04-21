@@ -225,7 +225,7 @@ func (d *Detector) GetSetupSummary(customEngineRoots []string) (string, error) {
 }
 
 // GetSimpleSetupSummary returns a simplified summary for the main menu
-func (d *Detector) GetSimpleSetupSummary(customEngineRoots []string, defaultBranch string) (string, error) {
+func (d *Detector) GetSimpleSetupSummary(customEngineRoots []string, defaultBranch, pinnedCommit string) (string, error) {
 	statuses, err := d.DetectSetupStatus(customEngineRoots)
 	if err != nil {
 		return "", err
@@ -248,7 +248,7 @@ func (d *Detector) GetSimpleSetupSummary(customEngineRoots []string, defaultBran
 			statusText = "Setup Complete"
 
 			// Check for updates
-			updateInfo, err := d.git.GetUpdateInfo(status.EngineVersion, defaultBranch)
+			updateInfo, err := d.git.GetUpdateInfo(status.EngineVersion, defaultBranch, pinnedCommit)
 			if err == nil && updateInfo.CommitsAhead > 0 {
 				statusText = fmt.Sprintf("Setup Complete (%d updates available)", updateInfo.CommitsAhead)
 			}

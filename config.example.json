@@ -4,6 +4,7 @@
   "origin_dir": "repo-origin",
   "worktrees_dir": "worktrees",
   "default_remote_branch": "dev",
+  "pinned_commit_sha": "40d8a5438e654927934c14d6836a67363fbe0495",
   "engines": [
     {
       "engine_path": "C:\\Program Files\\Epic Games\\UE_5.4",

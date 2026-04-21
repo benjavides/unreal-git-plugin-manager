@@ -23,6 +23,7 @@ This tool automates all of these steps, saving time and reducing errors for team
 - **Update management** with commit tracking and browser integration
 - **Collision detection** and resolution for stock Git plugins
 - **Per-engine configuration** and management
+- **Project lock tools** with one-click "Repair My Locks"
 - **Silent operation** - no annoying beeps or sounds
 
 ## Requirements
@@ -37,6 +38,14 @@ This tool automates all of these steps, saving time and reducing errors for team
 1. Download the latest release from [GitHub Releases](https://github.com/benjavides/ue-git-plugin-manager/releases)
 2. Extract `UE-Git-Plugin-Manager.exe` to any location
 3. Run the executable
+
+## Build (Developer)
+
+From the repository root, run:
+
+```bat
+build.bat
+```
 
 ## Quick Start
 
@@ -61,6 +70,11 @@ This tool automates all of these steps, saving time and reducing errors for team
    - The Git source control should now be available
    - You can commit, push, pull, and manage branches directly in the editor
 
+4. **Project lock troubleshooting (for artists)**
+   - Select "Configure project"
+   - Use "Repair My Locks" to unlock only safe-to-unlock locks
+   - Use "Show Current Project Locks" to see lock owner and lock time
+
 ## How It Works
 
 The tool creates a streamlined setup by:
@@ -83,6 +97,17 @@ The tool automatically checks for updates:
 - Only rebuilds when updates are actually available
 
 To update, go to "Edit Setup" → Select an engine → "Update Setup".
+
+By default this tool:
+
+- Tracks the `dev` branch
+- Pins setups to commit [`40d8a5438e654927934c14d6836a67363fbe0495`](https://github.com/ProjectBorealis/UEGitPlugin/commit/40d8a5438e654927934c14d6836a67363fbe0495) (2025-12-09 UTC)
+
+You can update the pin in:
+
+- Runtime config: `config.json` (`pinned_commit_sha`)
+- Source default: `internal/config/config.go` (`defaultPinnedCommit`)
+- Example config: `config.example.json`
 
 ## Managing Multiple Engines
 
